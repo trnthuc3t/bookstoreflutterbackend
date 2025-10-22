@@ -1,0 +1,678 @@
+# =====================================================
+# SQLALCHEMY MODELS CHO DATABASE BÁN SÁCH ONLINE
+# PostgreSQL Database Models
+# =====================================================
+
+from sqlalchemy import (
+    Column, Integer, String, Text, Boolean, DateTime, Date, 
+    ForeignKey, UniqueConstraint, CheckConstraint,
+    Index, Sequence, ARRAY, JSON
+)
+# from sqlalchemy.types import DECIMAL as Decimal, INET
+from sqlalchemy.types import DECIMAL as Decimal
+from sqlalchemy.dialects.postgresql import INET
+
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship, backref
+from datetime import datetime
+import uuid
+
+Base = declarative_base()
+
+# =====================================================
+# 1. HỆ THỐNG NGƯỜI DÙNG VÀ PHÂN QUYỀN
+# =====================================================
+
+class UserRole(Base):
+    __tablename__ = 'user_roles'
+    
+    id = Column(Integer, primary_key=True)
+    role_name = Column(String(50), unique=True, nullable=False)
+    description = Column(Text)
+    permissions = Column(JSON, default=dict)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    users = relationship("User", back_populates="role")
+
+class User(Base):
+    __tablename__ = 'users'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String(50), unique=True, nullable=False)
+    email = Column(String(100), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    phone = Column(String(20))
+    date_of_birth = Column(Date)
+    gender = Column(String(10))
+    avatar_url = Column(String(200))
+    role_id = Column(Integer, ForeignKey('user_roles.id'), default=2)
+    is_active = Column(Boolean, default=True)
+    email_verified = Column(Boolean, default=False)
+    phone_verified = Column(Boolean, default=False)
+    last_login = Column(DateTime)
+    login_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    role = relationship("UserRole", back_populates="users")
+    addresses = relationship("UserAddress", back_populates="user", cascade="all, delete-orphan")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
+    wishlist_items = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
+    reviews = relationship("BookReview", back_populates="user", cascade="all, delete-orphan")
+    orders = relationship("Order", back_populates="user")
+    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    activity_logs = relationship("ActivityLog", back_populates="user")
+    
+    # Indexes and Constraints
+    __table_args__ = (
+        Index('idx_users_email', 'email'),
+        Index('idx_users_role', 'role_id'),
+        Index('idx_users_active', 'is_active'),
+        Index('idx_users_created', 'created_at'),
+        CheckConstraint("gender IN ('male', 'female', 'other')"),
+    )
+
+class UserAddress(Base):
+    __tablename__ = 'user_addresses'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    address_type = Column(String(20), default='home')
+    recipient_name = Column(String(100), nullable=False)
+    phone = Column(String(20))
+    address_line1 = Column(String(200), nullable=False)
+    address_line2 = Column(String(200))
+    ward = Column(String(50))
+    district = Column(String(50))
+    city = Column(String(50), nullable=False)
+    postal_code = Column(String(20))
+    country = Column(String(50), default='Vietnam')
+    is_default = Column(Boolean, default=False)
+    latitude = Column(Decimal(10, 8))
+    longitude = Column(Decimal(11, 8))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="addresses")
+    orders = relationship("Order", back_populates="shipping_address")
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("address_type IN ('home', 'work', 'other')"),
+    )
+
+class UserSession(Base):
+    __tablename__ = 'user_sessions'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    session_token = Column(String(255), unique=True, nullable=False)
+    device_info = Column(JSON)
+    ip_address = Column(INET)
+    expires_at = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="sessions")
+
+# =====================================================
+# 2. QUẢN LÝ SẢN PHẨM SÁCH
+# =====================================================
+
+class Publisher(Base):
+    __tablename__ = 'publishers'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    description = Column(Text)
+    website = Column(String(200))
+    contact_email = Column(String(100))
+    contact_phone = Column(String(20))
+    address = Column(Text)
+    logo_url = Column(String(200))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    books = relationship("Book", back_populates="publisher")
+
+class Supplier(Base):
+    __tablename__ = 'suppliers'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    contact_person = Column(String(100))
+    email = Column(String(100))
+    phone = Column(String(20))
+    address = Column(Text)
+    payment_terms = Column(String(100))
+    credit_limit = Column(Decimal(15, 2), default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    books = relationship("Book", back_populates="supplier")
+
+class Category(Base):
+    __tablename__ = 'categories'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(100), unique=True, nullable=False)
+    slug = Column(String(100), unique=True, nullable=False)
+    description = Column(Text)
+    parent_id = Column(Integer, ForeignKey('categories.id'))
+    image_url = Column(String(200))
+    sort_order = Column(Integer, default=0)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    parent = relationship("Category", remote_side=[id], backref="children")
+    books = relationship("Book", back_populates="category")
+
+class Author(Base):
+    __tablename__ = 'authors'
+    
+    id = Column(Integer, primary_key=True)
+    first_name = Column(String(50), nullable=False)
+    last_name = Column(String(50), nullable=False)
+    pen_name = Column(String(100))
+    biography = Column(Text)
+    birth_date = Column(Date)
+    death_date = Column(Date)
+    nationality = Column(String(50))
+    website = Column(String(200))
+    image_url = Column(String(200))
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    book_authors = relationship("BookAuthor", back_populates="author")
+
+class Book(Base):
+    __tablename__ = 'books'
+    
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    subtitle = Column(String(200))
+    slug = Column(String(200), unique=True, nullable=False)
+    isbn = Column(String(20), unique=True)
+    description = Column(Text)
+    summary = Column(Text)
+    table_of_contents = Column(Text)
+    publication_year = Column(Integer)
+    pages = Column(Integer)
+    weight = Column(Decimal(8, 2))  # kg
+    dimensions = Column(String(50))  # "20x15x3 cm"
+    cover_type = Column(String(20))
+    language = Column(String(20), default='Vietnamese')
+    price = Column(Decimal(10, 2), nullable=False)
+    original_price = Column(Decimal(10, 2))
+    discount_percentage = Column(Decimal(5, 2), default=0)
+    cost_price = Column(Decimal(10, 2))  # Giá nhập
+    stock_quantity = Column(Integer, default=0)
+    min_stock_level = Column(Integer, default=5)
+    sold_quantity = Column(Integer, default=0)
+    view_count = Column(Integer, default=0)
+    rating_average = Column(Decimal(3, 2), default=0)
+    rating_count = Column(Integer, default=0)
+    publisher_id = Column(Integer, ForeignKey('publishers.id'))
+    supplier_id = Column(Integer, ForeignKey('suppliers.id'))
+    category_id = Column(Integer, ForeignKey('categories.id'))
+    is_active = Column(Boolean, default=True)
+    is_featured = Column(Boolean, default=False)
+    is_bestseller = Column(Boolean, default=False)
+    is_new_release = Column(Boolean, default=False)
+    meta_title = Column(String(200))
+    meta_description = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    publisher = relationship("Publisher", back_populates="books")
+    supplier = relationship("Supplier", back_populates="books")
+    category = relationship("Category", back_populates="books")
+    book_authors = relationship("BookAuthor", back_populates="book", cascade="all, delete-orphan")
+    book_images = relationship("BookImage", back_populates="book", cascade="all, delete-orphan")
+    book_tags = relationship("BookTag", back_populates="book", cascade="all, delete-orphan")
+    reviews = relationship("BookReview", back_populates="book", cascade="all, delete-orphan")
+    cart_items = relationship("CartItem", back_populates="book", cascade="all, delete-orphan")
+    wishlist_items = relationship("WishlistItem", back_populates="book", cascade="all, delete-orphan")
+    order_items = relationship("OrderItem", back_populates="book")
+    
+    # Indexes and Constraints
+    __table_args__ = (
+        Index('idx_books_category', 'category_id'),
+        Index('idx_books_publisher', 'publisher_id'),
+        Index('idx_books_price', 'price'),
+        Index('idx_books_rating', 'rating_average'),
+        Index('idx_books_stock', 'stock_quantity'),
+        Index('idx_books_active', 'is_active'),
+        Index('idx_books_featured', 'is_featured'),
+        Index('idx_books_slug', 'slug'),
+        Index('idx_books_title', 'title'),
+        CheckConstraint("cover_type IN ('hardcover', 'paperback', 'ebook', 'audiobook')"),
+    )
+
+class BookAuthor(Base):
+    __tablename__ = 'book_authors'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    author_id = Column(Integer, ForeignKey('authors.id', ondelete='CASCADE'), nullable=False)
+    role = Column(String(50), default='author')
+    sort_order = Column(Integer, default=0)
+    
+    # Relationships
+    book = relationship("Book", back_populates="book_authors")
+    author = relationship("Author", back_populates="book_authors")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('book_id', 'author_id', 'role'),
+        CheckConstraint("role IN ('author', 'co-author', 'editor', 'translator', 'illustrator')"),
+    )
+
+class BookImage(Base):
+    __tablename__ = 'book_images'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    image_url = Column(String(200), nullable=False)
+    image_type = Column(String(20), default='cover')
+    alt_text = Column(String(200))
+    sort_order = Column(Integer, default=0)
+    is_primary = Column(Boolean, default=False)
+    file_size = Column(Integer)  # bytes
+    width = Column(Integer)
+    height = Column(Integer)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    book = relationship("Book", back_populates="book_images")
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("image_type IN ('cover', 'back', 'spine', 'sample', 'gallery', 'other')"),
+    )
+
+class Tag(Base):
+    __tablename__ = 'tags'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, nullable=False)
+    slug = Column(String(50), unique=True, nullable=False)
+    description = Column(Text)
+    usage_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    book_tags = relationship("BookTag", back_populates="tag")
+
+class BookTag(Base):
+    __tablename__ = 'book_tags'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    tag_id = Column(Integer, ForeignKey('tags.id', ondelete='CASCADE'), nullable=False)
+    
+    # Relationships
+    book = relationship("Book", back_populates="book_tags")
+    tag = relationship("Tag", back_populates="book_tags")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('book_id', 'tag_id'),
+    )
+
+# =====================================================
+# 3. HỆ THỐNG ĐÁNH GIÁ VÀ REVIEW
+# =====================================================
+
+class BookReview(Base):
+    __tablename__ = 'book_reviews'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    rating = Column(Integer)
+    title = Column(String(200))
+    comment = Column(Text)
+    pros = Column(Text)  # Ưu điểm
+    cons = Column(Text)  # Nhược điểm
+    is_verified_purchase = Column(Boolean, default=False)
+    helpful_count = Column(Integer, default=0)
+    is_approved = Column(Boolean, default=True)
+    admin_notes = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    book = relationship("Book", back_populates="reviews")
+    user = relationship("User", back_populates="reviews")
+    review_ratings = relationship("ReviewRating", back_populates="review", cascade="all, delete-orphan")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('book_id', 'user_id'),
+        Index('idx_reviews_book', 'book_id'),
+        Index('idx_reviews_user', 'user_id'),
+        Index('idx_reviews_rating', 'rating'),
+        CheckConstraint("rating >= 1 AND rating <= 5"),
+    )
+
+class ReviewRating(Base):
+    __tablename__ = 'review_ratings'
+    
+    id = Column(Integer, primary_key=True)
+    review_id = Column(Integer, ForeignKey('book_reviews.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    is_helpful = Column(Boolean, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    review = relationship("BookReview", back_populates="review_ratings")
+    user = relationship("User")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('review_id', 'user_id'),
+    )
+
+# =====================================================
+# 4. HỆ THỐNG GIỎ HÀNG VÀ WISHLIST
+# =====================================================
+
+class CartItem(Base):
+    __tablename__ = 'cart_items'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    added_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="cart_items")
+    book = relationship("Book", back_populates="cart_items")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('user_id', 'book_id'),
+        Index('idx_cart_user', 'user_id'),
+        CheckConstraint("quantity > 0"),
+    )
+
+class WishlistItem(Base):
+    __tablename__ = 'wishlist_items'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="wishlist_items")
+    book = relationship("Book", back_populates="wishlist_items")
+    
+    # Constraints
+    __table_args__ = (
+        UniqueConstraint('user_id', 'book_id'),
+        Index('idx_wishlist_user', 'user_id'),
+    )
+
+class GuestCart(Base):
+    __tablename__ = 'guest_carts'
+    
+    id = Column(Integer, primary_key=True)
+    session_id = Column(String(100), unique=True, nullable=False)
+    device_id = Column(String(100))
+    cart_data = Column(JSON, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_guest_carts_session', 'session_id'),
+        Index('idx_guest_carts_expires', 'expires_at'),
+    )
+
+# =====================================================
+# 5. HỆ THỐNG VOUCHER VÀ KHUYẾN MÃI
+# =====================================================
+
+class Voucher(Base):
+    __tablename__ = 'vouchers'
+    
+    id = Column(Integer, primary_key=True)
+    code = Column(String(50), unique=True, nullable=False)
+    name = Column(String(100), nullable=False)
+    description = Column(Text)
+    discount_type = Column(String(20))
+    discount_value = Column(Decimal(10, 2), nullable=False)
+    min_order_amount = Column(Decimal(10, 2), default=0)
+    max_discount_amount = Column(Decimal(10, 2))
+    usage_limit = Column(Integer)
+    used_count = Column(Integer, default=0)
+    user_limit = Column(Integer, default=1)
+    start_date = Column(DateTime, nullable=False)
+    end_date = Column(DateTime, nullable=False)
+    is_active = Column(Boolean, default=True)
+    applicable_categories = Column(ARRAY(Integer))
+    applicable_books = Column(ARRAY(Integer))
+    excluded_categories = Column(ARRAY(Integer))
+    excluded_books = Column(ARRAY(Integer))
+    created_by = Column(Integer, ForeignKey('users.id'))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    creator = relationship("User")
+    voucher_usages = relationship("VoucherUsage", back_populates="voucher", cascade="all, delete-orphan")
+    orders = relationship("Order", back_populates="voucher")
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("discount_type IN ('percentage', 'fixed_amount', 'free_shipping')"),
+    )
+
+class VoucherUsage(Base):
+    __tablename__ = 'voucher_usage'
+    
+    id = Column(Integer, primary_key=True)
+    voucher_id = Column(Integer, ForeignKey('vouchers.id', ondelete='CASCADE'), nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete='CASCADE'), nullable=False)
+    discount_amount = Column(Decimal(10, 2), nullable=False)
+    used_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    voucher = relationship("Voucher", back_populates="voucher_usages")
+    user = relationship("User")
+    order = relationship("Order")
+
+# =====================================================
+# 6. HỆ THỐNG THANH TOÁN VÀ ĐƠN HÀNG
+# =====================================================
+
+class PaymentMethod(Base):
+    __tablename__ = 'payment_methods'
+    
+    id = Column(Integer, primary_key=True)
+    name = Column(String(50), unique=True, nullable=False)
+    description = Column(Text)
+    icon_url = Column(String(200))
+    is_active = Column(Boolean, default=True)
+    processing_fee_percentage = Column(Decimal(5, 2), default=0)
+    min_amount = Column(Decimal(10, 2), default=0)
+    max_amount = Column(Decimal(10, 2))
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    orders = relationship("Order", back_populates="payment_method")
+
+class Order(Base):
+    __tablename__ = 'orders'
+    
+    id = Column(Integer, primary_key=True)
+    order_number = Column(String(50), unique=True, nullable=False)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    status = Column(String(20), default='pending')
+    subtotal = Column(Decimal(10, 2), nullable=False)
+    discount_amount = Column(Decimal(10, 2), default=0)
+    shipping_fee = Column(Decimal(10, 2), default=0)
+    tax_amount = Column(Decimal(10, 2), default=0)
+    total_amount = Column(Decimal(10, 2), nullable=False)
+    payment_method_id = Column(Integer, ForeignKey('payment_methods.id'))
+    payment_status = Column(String(20), default='pending')
+    payment_reference = Column(String(100))
+    voucher_id = Column(Integer, ForeignKey('vouchers.id'))
+    shipping_address_id = Column(Integer, ForeignKey('user_addresses.id'))
+    notes = Column(Text)
+    tracking_number = Column(String(100))
+    estimated_delivery_date = Column(Date)
+    shipped_at = Column(DateTime)
+    delivered_at = Column(DateTime)
+    cancelled_at = Column(DateTime)
+    cancellation_reason = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="orders")
+    payment_method = relationship("PaymentMethod", back_populates="orders")
+    voucher = relationship("Voucher", back_populates="orders")
+    shipping_address = relationship("UserAddress", back_populates="orders")
+    order_items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
+    order_history = relationship("OrderHistory", back_populates="order", cascade="all, delete-orphan")
+    voucher_usages = relationship("VoucherUsage", back_populates="order")
+    
+    # Indexes and Constraints
+    __table_args__ = (
+        Index('idx_orders_user', 'user_id'),
+        Index('idx_orders_status', 'status'),
+        Index('idx_orders_created', 'created_at'),
+        Index('idx_orders_number', 'order_number'),
+        CheckConstraint("status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded')"),
+        CheckConstraint("payment_status IN ('pending', 'paid', 'failed', 'refunded', 'partially_refunded')"),
+    )
+
+class OrderItem(Base):
+    __tablename__ = 'order_items'
+    
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete='CASCADE'), nullable=False)
+    book_id = Column(Integer, ForeignKey('books.id'))
+    quantity = Column(Integer, nullable=False)
+    unit_price = Column(Decimal(10, 2), nullable=False)
+    discount_amount = Column(Decimal(10, 2), default=0)
+    total_price = Column(Decimal(10, 2), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    order = relationship("Order", back_populates="order_items")
+    book = relationship("Book", back_populates="order_items")
+    
+    # Indexes and Constraints
+    __table_args__ = (
+        Index('idx_order_items_order', 'order_id'),
+        Index('idx_order_items_book', 'book_id'),
+        CheckConstraint("quantity > 0"),
+    )
+
+class OrderHistory(Base):
+    __tablename__ = 'order_history'
+    
+    id = Column(Integer, primary_key=True)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete='CASCADE'), nullable=False)
+    status = Column(String(20), nullable=False)
+    notes = Column(Text)
+    created_by = Column(Integer, ForeignKey('users.id'))
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    order = relationship("Order", back_populates="order_history")
+    creator = relationship("User")
+
+# =====================================================
+# 7. HỆ THỐNG THÔNG BÁO VÀ LOGS
+# =====================================================
+
+class Notification(Base):
+    __tablename__ = 'notifications'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    title = Column(String(200), nullable=False)
+    message = Column(Text, nullable=False)
+    type = Column(String(50), default='info')
+    is_read = Column(Boolean, default=False)
+    related_entity_type = Column(String(50))  # 'order', 'book', 'review', etc.
+    related_entity_id = Column(Integer)
+    action_url = Column(String(200))
+    expires_at = Column(DateTime)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="notifications")
+    
+    # Indexes and Constraints
+    __table_args__ = (
+        Index('idx_notifications_user', 'user_id'),
+        Index('idx_notifications_read', 'is_read'),
+        Index('idx_notifications_created', 'created_at'),
+        CheckConstraint("type IN ('info', 'success', 'warning', 'error', 'promotion')"),
+    )
+
+class ActivityLog(Base):
+    __tablename__ = 'activity_logs'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id'))
+    action = Column(String(100), nullable=False)
+    entity_type = Column(String(50))
+    entity_id = Column(Integer)
+    details = Column(JSON)
+    ip_address = Column(INET)
+    user_agent = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", back_populates="activity_logs")
+
+class SystemSetting(Base):
+    __tablename__ = 'system_settings'
+    
+    id = Column(Integer, primary_key=True)
+    setting_key = Column(String(100), unique=True, nullable=False)
+    setting_value = Column(Text)
+    description = Column(Text)
+    data_type = Column(String(20), default='string')
+    is_public = Column(Boolean, default=False)
+    updated_by = Column(Integer, ForeignKey('users.id'))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    updater = relationship("User")
+    
+    # Constraints
+    __table_args__ = (
+        CheckConstraint("data_type IN ('string', 'number', 'boolean', 'json')"),
+    )
+
+# =====================================================
+# HOÀN THÀNH CÁC MODELS
+# =====================================================
+
+# Tạo sequence cho order number
+order_number_seq = Sequence('order_number_seq', start=1)

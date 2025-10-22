@@ -1,0 +1,42 @@
+# =====================================================
+# ENVIRONMENT CONFIGURATION CHO BOOKSTORE DATABASE
+# =====================================================
+
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=bookstore_online
+DB_USER=postgres
+DB_PASSWORD=password
+
+# JWT Secret (thay đổi trong production)
+JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_EXPIRE_MINUTES=30
+
+# App Configuration
+APP_NAME=BookStore API
+APP_VERSION=1.0.0
+DEBUG=True
+
+# CORS Settings (cho Flutter app)
+CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.1:8080"]
+
+# File Upload Settings
+MAX_FILE_SIZE=10485760  # 10MB
+UPLOAD_FOLDER=uploads
+
+# Email Settings (tùy chọn)
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=your-email@gmail.com
+SMTP_PASSWORD=your-app-password
+
+# Redis Settings (cho caching, tùy chọn)
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# Logging
+LOG_LEVEL=INFO
+LOG_FILE=logs/bookstore.log
