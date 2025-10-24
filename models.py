@@ -1,6 +1,6 @@
 # =====================================================
-# SQLALCHEMY MODELS CHO DATABASE BÁN SÁCH ONLINE
-# PostgreSQL Database Models
+# SQLALCHEMY MODELS CHO DATABASE BÁN SÁCH ONLINE - PHIÊN BẢN TỐI ƯU
+# PostgreSQL Database Models - Optimized Version
 # =====================================================
 
 from sqlalchemy import (
@@ -8,10 +8,8 @@ from sqlalchemy import (
     ForeignKey, UniqueConstraint, CheckConstraint,
     Index, Sequence, ARRAY, JSON
 )
-# from sqlalchemy.types import DECIMAL as Decimal, INET
 from sqlalchemy.types import DECIMAL as Decimal
 from sqlalchemy.dialects.postgresql import INET
-
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, backref
 from datetime import datetime
@@ -61,13 +59,10 @@ class User(Base):
     # Relationships
     role = relationship("UserRole", back_populates="users")
     addresses = relationship("UserAddress", back_populates="user", cascade="all, delete-orphan")
-    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
     cart_items = relationship("CartItem", back_populates="user", cascade="all, delete-orphan")
     wishlist_items = relationship("WishlistItem", back_populates="user", cascade="all, delete-orphan")
     reviews = relationship("BookReview", back_populates="user", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="user")
-    notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
-    activity_logs = relationship("ActivityLog", back_populates="user")
     
     # Indexes and Constraints
     __table_args__ = (
@@ -107,21 +102,6 @@ class UserAddress(Base):
     __table_args__ = (
         CheckConstraint("address_type IN ('home', 'work', 'other')"),
     )
-
-class UserSession(Base):
-    __tablename__ = 'user_sessions'
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    session_token = Column(String(255), unique=True, nullable=False)
-    device_info = Column(JSON)
-    ip_address = Column(INET)
-    expires_at = Column(DateTime, nullable=False)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    user = relationship("User", back_populates="sessions")
 
 # =====================================================
 # 2. QUẢN LÝ SẢN PHẨM SÁCH
@@ -242,7 +222,6 @@ class Book(Base):
     category = relationship("Category", back_populates="books")
     book_authors = relationship("BookAuthor", back_populates="book", cascade="all, delete-orphan")
     book_images = relationship("BookImage", back_populates="book", cascade="all, delete-orphan")
-    book_tags = relationship("BookTag", back_populates="book", cascade="all, delete-orphan")
     reviews = relationship("BookReview", back_populates="book", cascade="all, delete-orphan")
     cart_items = relationship("CartItem", back_populates="book", cascade="all, delete-orphan")
     wishlist_items = relationship("WishlistItem", back_populates="book", cascade="all, delete-orphan")
@@ -304,35 +283,6 @@ class BookImage(Base):
         CheckConstraint("image_type IN ('cover', 'back', 'spine', 'sample', 'gallery', 'other')"),
     )
 
-class Tag(Base):
-    __tablename__ = 'tags'
-    
-    id = Column(Integer, primary_key=True)
-    name = Column(String(50), unique=True, nullable=False)
-    slug = Column(String(50), unique=True, nullable=False)
-    description = Column(Text)
-    usage_count = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    book_tags = relationship("BookTag", back_populates="tag")
-
-class BookTag(Base):
-    __tablename__ = 'book_tags'
-    
-    id = Column(Integer, primary_key=True)
-    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
-    tag_id = Column(Integer, ForeignKey('tags.id', ondelete='CASCADE'), nullable=False)
-    
-    # Relationships
-    book = relationship("Book", back_populates="book_tags")
-    tag = relationship("Tag", back_populates="book_tags")
-    
-    # Constraints
-    __table_args__ = (
-        UniqueConstraint('book_id', 'tag_id'),
-    )
-
 # =====================================================
 # 3. HỆ THỐNG ĐÁNH GIÁ VÀ REVIEW
 # =====================================================
@@ -358,7 +308,6 @@ class BookReview(Base):
     # Relationships
     book = relationship("Book", back_populates="reviews")
     user = relationship("User", back_populates="reviews")
-    review_ratings = relationship("ReviewRating", back_populates="review", cascade="all, delete-orphan")
     
     # Constraints
     __table_args__ = (
@@ -379,7 +328,7 @@ class ReviewRating(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
-    review = relationship("BookReview", back_populates="review_ratings")
+    review = relationship("BookReview")
     user = relationship("User")
     
     # Constraints
@@ -428,23 +377,6 @@ class WishlistItem(Base):
     __table_args__ = (
         UniqueConstraint('user_id', 'book_id'),
         Index('idx_wishlist_user', 'user_id'),
-    )
-
-class GuestCart(Base):
-    __tablename__ = 'guest_carts'
-    
-    id = Column(Integer, primary_key=True)
-    session_id = Column(String(100), unique=True, nullable=False)
-    device_id = Column(String(100))
-    cart_data = Column(JSON, nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Indexes
-    __table_args__ = (
-        Index('idx_guest_carts_session', 'session_id'),
-        Index('idx_guest_carts_expires', 'expires_at'),
     )
 
 # =====================================================
@@ -603,72 +535,6 @@ class OrderHistory(Base):
     # Relationships
     order = relationship("Order", back_populates="order_history")
     creator = relationship("User")
-
-# =====================================================
-# 7. HỆ THỐNG THÔNG BÁO VÀ LOGS
-# =====================================================
-
-class Notification(Base):
-    __tablename__ = 'notifications'
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    title = Column(String(200), nullable=False)
-    message = Column(Text, nullable=False)
-    type = Column(String(50), default='info')
-    is_read = Column(Boolean, default=False)
-    related_entity_type = Column(String(50))  # 'order', 'book', 'review', etc.
-    related_entity_id = Column(Integer)
-    action_url = Column(String(200))
-    expires_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    user = relationship("User", back_populates="notifications")
-    
-    # Indexes and Constraints
-    __table_args__ = (
-        Index('idx_notifications_user', 'user_id'),
-        Index('idx_notifications_read', 'is_read'),
-        Index('idx_notifications_created', 'created_at'),
-        CheckConstraint("type IN ('info', 'success', 'warning', 'error', 'promotion')"),
-    )
-
-class ActivityLog(Base):
-    __tablename__ = 'activity_logs'
-    
-    id = Column(Integer, primary_key=True)
-    user_id = Column(Integer, ForeignKey('users.id'))
-    action = Column(String(100), nullable=False)
-    entity_type = Column(String(50))
-    entity_id = Column(Integer)
-    details = Column(JSON)
-    ip_address = Column(INET)
-    user_agent = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    
-    # Relationships
-    user = relationship("User", back_populates="activity_logs")
-
-class SystemSetting(Base):
-    __tablename__ = 'system_settings'
-    
-    id = Column(Integer, primary_key=True)
-    setting_key = Column(String(100), unique=True, nullable=False)
-    setting_value = Column(Text)
-    description = Column(Text)
-    data_type = Column(String(20), default='string')
-    is_public = Column(Boolean, default=False)
-    updated_by = Column(Integer, ForeignKey('users.id'))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationships
-    updater = relationship("User")
-    
-    # Constraints
-    __table_args__ = (
-        CheckConstraint("data_type IN ('string', 'number', 'boolean', 'json')"),
-    )
 
 # =====================================================
 # HOÀN THÀNH CÁC MODELS

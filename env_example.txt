@@ -40,3 +40,5 @@ REDIS_PASSWORD=
 # Logging
 LOG_LEVEL=INFO
 LOG_FILE=logs/bookstore.log
+
+

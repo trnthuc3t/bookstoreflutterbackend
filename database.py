@@ -164,3 +164,5 @@ if __name__ == "__main__":
         print(f"Host: {DATABASE_CONFIG['host']}:{DATABASE_CONFIG['port']}")
     else:
         print("Database connection failed!")
+
+

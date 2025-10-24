@@ -87,26 +87,26 @@ def check_environment():
 def main():
     """Main function"""
     print("=" * 60)
-    print("📚 BOOKSTORE DATABASE SETUP")
+    print("BOOKSTORE DATABASE SETUP")
     print("=" * 60)
     
     # Kiểm tra environment
     if not check_environment():
-        logger.info("🔄 Sử dụng cấu hình mặc định...")
+        logger.info("Sử dụng cấu hình mặc định...")
     
     # Setup database
     success = setup_database()
     
     if success:
         print("\n" + "=" * 60)
-        print("🎉 HOÀN THÀNH!")
+        print("HOÀN THÀNH!")
         print("=" * 60)
-        print("📖 Database đã sẵn sàng cho ứng dụng bán sách!")
-        print("🚀 Bạn có thể bắt đầu phát triển API và kết nối Flutter app")
+        print("Database đã sẵn sàng cho ứng dụng bán sách!")
+        print("Bạn có thể bắt đầu phát triển API và kết nối Flutter app")
         print("=" * 60)
     else:
         print("\n" + "=" * 60)
-        print("❌ SETUP THẤT BẠI!")
+        print("SETUP THẤT BẠI!")
         print("=" * 60)
         print("💡 Hãy kiểm tra lại:")
         print("   1. PostgreSQL đã được cài đặt và chạy")
@@ -118,3 +118,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

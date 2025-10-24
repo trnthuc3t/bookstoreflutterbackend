@@ -33,19 +33,13 @@ def seed_database():
         # 6. Thêm Authors
         seed_authors(db)
         
-        # 7. Thêm System Settings
-        seed_system_settings(db)
-        
-        # 8. Thêm Sample Users
+        # 7. Thêm Sample Users
         seed_users(db)
         
-        # 9. Thêm Sample Books
+        # 8. Thêm Sample Books
         seed_books(db)
         
-        # 10. Thêm Sample Tags
-        seed_tags(db)
-        
-        # 11. Thêm Sample Vouchers
+        # 9. Thêm Sample Vouchers
         seed_vouchers(db)
         
         db.commit()
@@ -329,29 +323,6 @@ def seed_authors(db):
     
     logger.info("✅ Authors đã được thêm!")
 
-def seed_system_settings(db):
-    """Thêm cấu hình hệ thống"""
-    settings_data = [
-        {'setting_key': 'site_name', 'setting_value': 'Cửa hàng Sách Online', 'description': 'Tên website', 'data_type': 'string', 'is_public': True},
-        {'setting_key': 'currency', 'setting_value': 'VND', 'description': 'Đơn vị tiền tệ', 'data_type': 'string', 'is_public': True},
-        {'setting_key': 'free_shipping_threshold', 'setting_value': '500000', 'description': 'Ngưỡng miễn phí ship (VND)', 'data_type': 'number', 'is_public': True},
-        {'setting_key': 'max_cart_items', 'setting_value': '50', 'description': 'Số lượng tối đa trong giỏ hàng', 'data_type': 'number', 'is_public': False},
-        {'setting_key': 'review_approval_required', 'setting_value': 'true', 'description': 'Yêu cầu duyệt review', 'data_type': 'boolean', 'is_public': False},
-        {'setting_key': 'min_order_amount', 'setting_value': '50000', 'description': 'Đơn hàng tối thiểu (VND)', 'data_type': 'number', 'is_public': True},
-        {'setting_key': 'shipping_fee', 'setting_value': '30000', 'description': 'Phí ship cơ bản (VND)', 'data_type': 'number', 'is_public': True},
-        {'setting_key': 'tax_rate', 'setting_value': '10', 'description': 'Thuế VAT (%)', 'data_type': 'number', 'is_public': True},
-        {'setting_key': 'max_review_length', 'setting_value': '1000', 'description': 'Độ dài tối đa của review', 'data_type': 'number', 'is_public': False},
-        {'setting_key': 'enable_guest_checkout', 'setting_value': 'true', 'description': 'Cho phép thanh toán không cần đăng ký', 'data_type': 'boolean', 'is_public': True}
-    ]
-    
-    for setting_data in settings_data:
-        existing_setting = db.query(SystemSetting).filter(SystemSetting.setting_key == setting_data['setting_key']).first()
-        if not existing_setting:
-            setting = SystemSetting(**setting_data)
-            db.add(setting)
-    
-    logger.info("✅ System settings đã được thêm!")
-
 def seed_users(db):
     """Thêm user mẫu"""
     users_data = [
@@ -490,27 +461,6 @@ def seed_books(db):
     
     logger.info("✅ Books đã được thêm!")
 
-def seed_tags(db):
-    """Thêm tags mẫu"""
-    tags_data = [
-        {'name': 'Bestseller', 'slug': 'bestseller', 'description': 'Sách bán chạy'},
-        {'name': 'Mới', 'slug': 'moi', 'description': 'Sách mới xuất bản'},
-        {'name': 'Giảm giá', 'slug': 'giam-gia', 'description': 'Sách đang giảm giá'},
-        {'name': 'Thiếu nhi', 'slug': 'thieu-nhi', 'description': 'Sách dành cho trẻ em'},
-        {'name': 'Văn học', 'slug': 'van-hoc', 'description': 'Tác phẩm văn học'},
-        {'name': 'Kinh doanh', 'slug': 'kinh-doanh', 'description': 'Sách về kinh doanh'},
-        {'name': 'Tâm lý', 'slug': 'tam-ly', 'description': 'Sách về tâm lý học'},
-        {'name': 'Phát triển bản thân', 'slug': 'phat-trien-ban-than', 'description': 'Sách phát triển bản thân'}
-    ]
-    
-    for tag_data in tags_data:
-        existing_tag = db.query(Tag).filter(Tag.slug == tag_data['slug']).first()
-        if not existing_tag:
-            tag = Tag(**tag_data)
-            db.add(tag)
-    
-    logger.info("✅ Tags đã được thêm!")
-
 def seed_vouchers(db):
     """Thêm voucher mẫu"""
     from datetime import datetime, timedelta
@@ -572,3 +522,4 @@ def seed_vouchers(db):
 if __name__ == "__main__":
     # Chạy seed data khi chạy trực tiếp file
     seed_database()
+
