@@ -45,14 +45,11 @@ class User(Base):
     last_name = Column(String(50), nullable=False)
     phone = Column(String(20))
     date_of_birth = Column(Date)
-    gender = Column(String(10))
     avatar_url = Column(String(200))
     role_id = Column(Integer, ForeignKey('user_roles.id'), default=2)
     is_active = Column(Boolean, default=True)
     email_verified = Column(Boolean, default=False)
     phone_verified = Column(Boolean, default=False)
-    last_login = Column(DateTime)
-    login_count = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -70,7 +67,6 @@ class User(Base):
         Index('idx_users_role', 'role_id'),
         Index('idx_users_active', 'is_active'),
         Index('idx_users_created', 'created_at'),
-        CheckConstraint("gender IN ('male', 'female', 'other')"),
     )
 
 class UserAddress(Base):
@@ -78,7 +74,6 @@ class UserAddress(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
-    address_type = Column(String(20), default='home')
     recipient_name = Column(String(100), nullable=False)
     phone = Column(String(20))
     address_line1 = Column(String(200), nullable=False)
@@ -86,22 +81,14 @@ class UserAddress(Base):
     ward = Column(String(50))
     district = Column(String(50))
     city = Column(String(50), nullable=False)
-    postal_code = Column(String(20))
     country = Column(String(50), default='Vietnam')
     is_default = Column(Boolean, default=False)
-    latitude = Column(Decimal(10, 8))
-    longitude = Column(Decimal(11, 8))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     user = relationship("User", back_populates="addresses")
     orders = relationship("Order", back_populates="shipping_address")
-    
-    # Constraints
-    __table_args__ = (
-        CheckConstraint("address_type IN ('home', 'work', 'other')"),
-    )
 
 # =====================================================
 # 2. QUẢN LÝ SẢN PHẨM SÁCH
@@ -112,12 +99,8 @@ class Publisher(Base):
     
     id = Column(Integer, primary_key=True)
     name = Column(String(100), unique=True, nullable=False)
-    description = Column(Text)
-    website = Column(String(200))
     contact_email = Column(String(100))
     contact_phone = Column(String(20))
-    address = Column(Text)
-    logo_url = Column(String(200))
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -133,8 +116,6 @@ class Supplier(Base):
     email = Column(String(100))
     phone = Column(String(20))
     address = Column(Text)
-    payment_terms = Column(String(100))
-    credit_limit = Column(Decimal(15, 2), default=0)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -162,15 +143,7 @@ class Author(Base):
     __tablename__ = 'authors'
     
     id = Column(Integer, primary_key=True)
-    first_name = Column(String(50), nullable=False)
-    last_name = Column(String(50), nullable=False)
-    pen_name = Column(String(100))
-    biography = Column(Text)
-    birth_date = Column(Date)
-    death_date = Column(Date)
-    nationality = Column(String(50))
-    website = Column(String(200))
-    image_url = Column(String(200))
+    pen_name = Column(String(100), nullable=False, unique=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
@@ -182,24 +155,17 @@ class Book(Base):
     
     id = Column(Integer, primary_key=True)
     title = Column(String(200), nullable=False)
-    subtitle = Column(String(200))
     slug = Column(String(200), unique=True, nullable=False)
     isbn = Column(String(20), unique=True)
     description = Column(Text)
-    summary = Column(Text)
-    table_of_contents = Column(Text)
     publication_year = Column(Integer)
     pages = Column(Integer)
-    weight = Column(Decimal(8, 2))  # kg
-    dimensions = Column(String(50))  # "20x15x3 cm"
     cover_type = Column(String(20))
     language = Column(String(20), default='Vietnamese')
     price = Column(Decimal(10, 2), nullable=False)
     original_price = Column(Decimal(10, 2))
     discount_percentage = Column(Decimal(5, 2), default=0)
-    cost_price = Column(Decimal(10, 2))  # Giá nhập
     stock_quantity = Column(Integer, default=0)
-    min_stock_level = Column(Integer, default=5)
     sold_quantity = Column(Integer, default=0)
     view_count = Column(Integer, default=0)
     rating_average = Column(Decimal(3, 2), default=0)
@@ -210,9 +176,6 @@ class Book(Base):
     is_active = Column(Boolean, default=True)
     is_featured = Column(Boolean, default=False)
     is_bestseller = Column(Boolean, default=False)
-    is_new_release = Column(Boolean, default=False)
-    meta_title = Column(String(200))
-    meta_description = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -231,6 +194,7 @@ class Book(Base):
     __table_args__ = (
         Index('idx_books_category', 'category_id'),
         Index('idx_books_publisher', 'publisher_id'),
+        Index('idx_books_supplier', 'supplier_id'),
         Index('idx_books_price', 'price'),
         Index('idx_books_rating', 'rating_average'),
         Index('idx_books_stock', 'stock_quantity'),
@@ -266,22 +230,12 @@ class BookImage(Base):
     id = Column(Integer, primary_key=True)
     book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
     image_url = Column(String(200), nullable=False)
-    image_type = Column(String(20), default='cover')
-    alt_text = Column(String(200))
     sort_order = Column(Integer, default=0)
     is_primary = Column(Boolean, default=False)
-    file_size = Column(Integer)  # bytes
-    width = Column(Integer)
-    height = Column(Integer)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
     book = relationship("Book", back_populates="book_images")
-    
-    # Constraints
-    __table_args__ = (
-        CheckConstraint("image_type IN ('cover', 'back', 'spine', 'sample', 'gallery', 'other')"),
-    )
 
 # =====================================================
 # 3. HỆ THỐNG ĐÁNH GIÁ VÀ REVIEW
@@ -296,14 +250,8 @@ class BookReview(Base):
     rating = Column(Integer)
     title = Column(String(200))
     comment = Column(Text)
-    pros = Column(Text)  # Ưu điểm
-    cons = Column(Text)  # Nhược điểm
-    is_verified_purchase = Column(Boolean, default=False)
-    helpful_count = Column(Integer, default=0)
     is_approved = Column(Boolean, default=True)
-    admin_notes = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
     # Relationships
     book = relationship("Book", back_populates="reviews")
@@ -444,10 +392,6 @@ class PaymentMethod(Base):
     description = Column(Text)
     icon_url = Column(String(200))
     is_active = Column(Boolean, default=True)
-    processing_fee_percentage = Column(Decimal(5, 2), default=0)
-    min_amount = Column(Decimal(10, 2), default=0)
-    max_amount = Column(Decimal(10, 2))
-    sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Relationships
@@ -463,7 +407,6 @@ class Order(Base):
     subtotal = Column(Decimal(10, 2), nullable=False)
     discount_amount = Column(Decimal(10, 2), default=0)
     shipping_fee = Column(Decimal(10, 2), default=0)
-    tax_amount = Column(Decimal(10, 2), default=0)
     total_amount = Column(Decimal(10, 2), nullable=False)
     payment_method_id = Column(Integer, ForeignKey('payment_methods.id'))
     payment_status = Column(String(20), default='pending')

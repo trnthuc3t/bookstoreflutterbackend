@@ -2,21 +2,34 @@
 # FASTAPI MAIN APPLICATION CHO BOOKSTORE BACKEND
 # =====================================================
 
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware import Middleware
+from starlette.requests import Request
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, EmailStr
 from passlib.context import CryptContext
+import bcrypt
 from datetime import datetime, timedelta
 import re
 import uuid
 from typing import Optional, List
+import shutil
 
 # Load environment variables
 load_dotenv()
+
+# Get base URL from environment or use default
+# To change URL, set environment variable: export BASE_URL="new_url_here"
+# Or update this default value
+BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-8000.asse.devtunnels.ms')
+print(f"Using BASE_URL: {BASE_URL}")
 
 # Import database and models
 from database import get_db, engine, Base
@@ -31,6 +44,36 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Add UTF-8 encoding middleware
+@app.middleware("http")
+async def add_charset_header(request: Request, call_next):
+    response = await call_next(request)
+    # Only add charset to JSON responses, not binary files
+    if "application/json" in response.headers.get("Content-Type", ""):
+        response.headers["Content-Type"] = "application/json; charset=utf-8"
+    return response
+
+# Auto-create tables if not exist
+@app.on_event("startup")
+async def startup_event():
+    """Create tables if they don't exist and start app"""
+    print("🚀 BookStore API đang khởi động...")
+    
+    # Create uploads directory
+    upload_dir = "uploads/books"
+    os.makedirs(upload_dir, exist_ok=True)
+    print("✅ Upload directory created")
+    
+    # Auto-create tables
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("✅ Database tables checked/created")
+    except Exception as e:
+        print(f"⚠️ Could not create tables: {e}")
+        print("💡 Run: python setup_database.py to setup database")
+    
+    print("📚 API Documentation available at /docs")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -39,6 +82,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Mount static files for uploaded images
+if os.path.exists("uploads"):
+    app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Security
 security = HTTPBearer()
@@ -58,14 +105,12 @@ class UserCreate(BaseModel):
     last_name: str
     phone: Optional[str] = None
     date_of_birth: Optional[str] = None
-    gender: Optional[str] = None
 
 class UserUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
     phone: Optional[str] = None
     date_of_birth: Optional[str] = None
-    gender: Optional[str] = None
     avatar_url: Optional[str] = None
 
 class UserResponse(BaseModel):
@@ -97,7 +142,6 @@ class BookCreate(BaseModel):
     subtitle: Optional[str] = None
     isbn: Optional[str] = None
     description: Optional[str] = None
-    summary: Optional[str] = None
     publication_year: Optional[int] = None
     pages: Optional[int] = None
     price: float
@@ -112,7 +156,6 @@ class BookUpdate(BaseModel):
     title: Optional[str] = None
     subtitle: Optional[str] = None
     description: Optional[str] = None
-    summary: Optional[str] = None
     price: Optional[float] = None
     original_price: Optional[float] = None
     stock_quantity: Optional[int] = None
@@ -141,8 +184,6 @@ class BookReviewCreate(BaseModel):
     rating: int
     title: Optional[str] = None
     comment: Optional[str] = None
-    pros: Optional[str] = None
-    cons: Optional[str] = None
 
 class WishlistItemCreate(BaseModel):
     book_id: int
@@ -152,20 +193,41 @@ class WishlistItemCreate(BaseModel):
 # =====================================================
 
 def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify password using bcrypt"""
+    try:
+        # Try with pwd_context first
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        # Fallback to bcrypt directly if passlib fails
+        try:
+            return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+        except:
+            return False
 
 def get_password_hash(password):
-    return pwd_context.hash(password)
+    """Hash password using bcrypt"""
+    try:
+        # Try with pwd_context first
+        return pwd_context.hash(password)
+    except Exception:
+        # Fallback to bcrypt directly
+        # Hash the password to avoid bcrypt 72-byte limit
+        password_bytes = password.encode('utf-8')
+        hashed = bcrypt.hashpw(password_bytes, bcrypt.gensalt())
+        return hashed.decode('utf-8')
 
 def validate_email(email):
     pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     return re.match(pattern, email) is not None
 
 def validate_phone(phone):
-    if not phone:
+    if not phone or phone.strip() == '':
         return True
-    pattern = r'^[0-9+\-\s()]{10,15}$'
-    return re.match(pattern, phone) is not None
+    # Allow Vietnamese phone numbers with or without country code
+    # Examples: 0123456789, 0912345678, +84912345678, 091-234-5678
+    cleaned_phone = re.sub(r'[\s\-\(\)]', '', phone)  # Remove spaces, dashes, parentheses
+    pattern = r'^(\+?84|0)[0-9]{9,10}$'
+    return re.match(pattern, cleaned_phone) is not None
 
 def generate_order_number():
     return f"ORD-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
@@ -198,7 +260,7 @@ async def health_check():
     try:
         # Test database connection
         db = next(get_db())
-        db.execute("SELECT 1")
+        db.execute(text("SELECT 1"))
         
         return {
             "status": "healthy",
@@ -236,10 +298,6 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     if user_data.phone and not validate_phone(user_data.phone):
         raise HTTPException(status_code=400, detail="Số điện thoại không hợp lệ")
     
-    # Validate gender
-    if user_data.gender and user_data.gender not in ['male', 'female', 'other']:
-        raise HTTPException(status_code=400, detail="Giới tính phải là 'male', 'female' hoặc 'other'")
-    
     # Check if username already exists
     existing_user = db.query(User).filter(User.username == user_data.username).first()
     if existing_user:
@@ -270,7 +328,6 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
         last_name=user_data.last_name,
         phone=user_data.phone,
         date_of_birth=date_of_birth,
-        gender=user_data.gender,
         role_id=2,  # Default role: customer
         is_active=True,
         email_verified=False,
@@ -321,9 +378,6 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Tài khoản đã bị khóa")
     
-    # Update last login
-    user.last_login = datetime.utcnow()
-    user.login_count += 1
     db.commit()
     
     # Generate token (placeholder - implement JWT later)
@@ -425,10 +479,6 @@ async def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends
     if user_data.phone and not validate_phone(user_data.phone):
         raise HTTPException(status_code=400, detail="Số điện thoại không hợp lệ")
     
-    # Validate gender if provided
-    if user_data.gender and user_data.gender not in ['male', 'female', 'other']:
-        raise HTTPException(status_code=400, detail="Giới tính phải là 'male', 'female' hoặc 'other'")
-    
     # Parse date of birth if provided
     if user_data.date_of_birth:
         try:
@@ -443,8 +493,6 @@ async def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends
         user.last_name = user_data.last_name
     if user_data.phone is not None:
         user.phone = user_data.phone
-    if user_data.gender is not None:
-        user.gender = user_data.gender
     if user_data.avatar_url is not None:
         user.avatar_url = user_data.avatar_url
     
@@ -504,7 +552,6 @@ async def get_user_addresses(user_id: int, db: Session = Depends(get_db)):
         "addresses": [
             {
                 "id": addr.id,
-                "address_type": addr.address_type,
                 "recipient_name": addr.recipient_name,
                 "phone": addr.phone,
                 "address_line1": addr.address_line1,
@@ -512,7 +559,6 @@ async def get_user_addresses(user_id: int, db: Session = Depends(get_db)):
                 "ward": addr.ward,
                 "district": addr.district,
                 "city": addr.city,
-                "postal_code": addr.postal_code,
                 "country": addr.country,
                 "is_default": addr.is_default,
                 "created_at": addr.created_at
@@ -534,7 +580,6 @@ async def create_user_address(user_id: int, address_data: dict, db: Session = De
     
     new_address = UserAddress(
         user_id=user_id,
-        address_type=address_data.get("address_type", "home"),
         recipient_name=address_data["recipient_name"],
         phone=address_data.get("phone"),
         address_line1=address_data["address_line1"],
@@ -542,7 +587,6 @@ async def create_user_address(user_id: int, address_data: dict, db: Session = De
         ward=address_data.get("ward"),
         district=address_data.get("district"),
         city=address_data["city"],
-        postal_code=address_data.get("postal_code"),
         country=address_data.get("country", "Vietnam"),
         is_default=address_data.get("is_default", False)
     )
@@ -589,14 +633,26 @@ async def get_books(
                 "id": book.id,
                 "title": book.title,
                 "slug": book.slug,
+                "description": book.description,
                 "price": float(book.price),
                 "original_price": float(book.original_price) if book.original_price else None,
                 "discount_percentage": float(book.discount_percentage),
                 "stock_quantity": book.stock_quantity,
                 "rating_average": float(book.rating_average),
                 "rating_count": book.rating_count,
-                "category": book.category.name if book.category else None,
+                "category": {
+                    "id": book.category.id if book.category else None,
+                    "name": book.category.name if book.category else None
+                },
                 "publisher": book.publisher.name if book.publisher else None,
+                "images": [
+                    {
+                        "id": img.id,
+                        "url": img.image_url,
+                        "is_primary": img.is_primary
+                    }
+                    for img in book.book_images
+                ],
                 "is_featured": book.is_featured,
                 "is_bestseller": book.is_bestseller,
                 "created_at": book.created_at
@@ -617,7 +673,7 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
     authors = [
         {
             "id": ba.author.id,
-            "name": f"{ba.author.first_name} {ba.author.last_name}",
+            "name": ba.author.pen_name,
             "role": ba.role
         }
         for ba in book.book_authors
@@ -628,7 +684,6 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         {
             "id": img.id,
             "url": img.image_url,
-            "type": img.image_type,
             "is_primary": img.is_primary
         }
         for img in book.book_images
@@ -641,7 +696,6 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "slug": book.slug,
         "isbn": book.isbn,
         "description": book.description,
-        "summary": book.summary,
         "price": float(book.price),
         "original_price": float(book.original_price) if book.original_price else None,
         "discount_percentage": float(book.discount_percentage),
@@ -668,6 +722,93 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "created_at": book.created_at
     }
 
+@app.post("/api/books/{book_id}/images")
+async def add_book_image(
+    book_id: int,
+    image_data: dict,
+    db: Session = Depends(get_db)
+):
+    """Thêm ảnh cho sách bằng URL"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    new_image = BookImage(
+        book_id=book_id,
+        image_url=image_data.get('image_url'),
+        sort_order=image_data.get('sort_order', 0),
+        is_primary=image_data.get('is_primary', False)
+    )
+    
+    try:
+        db.add(new_image)
+        db.commit()
+        db.refresh(new_image)
+        
+        return {
+            "id": new_image.id,
+            "book_id": new_image.book_id,
+            "image_url": new_image.image_url,
+            "message": "Ảnh đã được thêm thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi thêm ảnh: {str(e)}")
+
+@app.post("/api/books/{book_id}/upload-image")
+async def upload_book_image(
+    book_id: int,
+    file: UploadFile = File(...),
+    sort_order: int = 0,
+    is_primary: bool = False,
+    db: Session = Depends(get_db)
+):
+    """Upload ảnh từ file local"""
+    # Kiểm tra sách tồn tại
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    # Tạo thư mục upload nếu chưa có
+    upload_dir = "uploads/books"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    # Tạo tên file unique
+    file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+    unique_filename = f"{book_id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+    file_path = os.path.join(upload_dir, unique_filename)
+    
+    # Lưu file
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Lưu URL vào database
+        image_url = f"{BASE_URL}/{file_path}"
+        new_image = BookImage(
+            book_id=book_id,
+            image_url=image_url,
+            sort_order=sort_order,
+            is_primary=is_primary
+        )
+        
+        db.add(new_image)
+        db.commit()
+        db.refresh(new_image)
+        
+        return {
+            "id": new_image.id,
+            "book_id": new_image.book_id,
+            "image_url": image_url,
+            "message": "Ảnh đã được upload thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        # Xóa file nếu có lỗi
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Lỗi khi upload ảnh: {str(e)}")
+
 @app.post("/api/books")
 async def create_book(book_data: BookCreate, db: Session = Depends(get_db)):
     """Tạo sách mới (Admin only)"""
@@ -691,7 +832,6 @@ async def create_book(book_data: BookCreate, db: Session = Depends(get_db)):
         slug=slug,
         isbn=book_data.isbn,
         description=book_data.description,
-        summary=book_data.summary,
         publication_year=book_data.publication_year,
         pages=book_data.pages,
         price=book_data.price,
@@ -721,6 +861,123 @@ async def create_book(book_data: BookCreate, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo sách: {str(e)}")
 
+@app.post("/api/books/create-with-image")
+async def create_book_with_image(
+    title: str = Form(...),
+    description: str = Form(None),
+    isbn: str = Form(None),
+    publication_year: str = Form(None),
+    pages: str = Form(None),
+    price: str = Form("0"),
+    original_price: str = Form(None),
+    stock_quantity: str = Form("0"),
+    category_id: str = Form(None),
+    publisher_id: str = Form(None),
+    supplier_id: str = Form(None),
+    language: str = Form("Vietnamese"),
+    cover_type: str = Form("paperback"),
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """Tạo sách mới và upload ảnh cùng lúc"""
+    
+    # Parse fields
+    try:
+        publication_year_int = int(publication_year) if publication_year and publication_year != "None" and publication_year != "" else None
+        pages_int = int(pages) if pages and pages != "None" and pages != "" else None
+        price_float = float(price) if price and price != "None" and price != "" else 0.0
+        original_price_float = float(original_price) if original_price and original_price != "None" and original_price != "" else None
+        stock_quantity_int = int(stock_quantity) if stock_quantity and stock_quantity != "None" and stock_quantity != "" else 0
+        category_id_int = int(category_id) if category_id and category_id != "None" and category_id != "" else None
+        publisher_id_int = int(publisher_id) if publisher_id and publisher_id != "None" and publisher_id != "" else None
+        supplier_id_int = int(supplier_id) if supplier_id and supplier_id != "None" and supplier_id != "" else None
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid numeric values: {str(e)}")
+    
+    # Generate slug from title
+    slug = title.lower().replace(" ", "-").replace("_", "-")
+    slug = re.sub(r'[^a-z0-9\-]', '', slug)
+    
+    # Check if slug exists
+    existing_book = db.query(Book).filter(Book.slug == slug).first()
+    if existing_book:
+        slug = f"{slug}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+    
+    # Calculate discount percentage
+    discount_percentage = 0
+    if original_price_float and original_price_float > price_float:
+        discount_percentage = ((original_price_float - price_float) / original_price_float) * 100
+    
+    # Create book
+    new_book = Book(
+        title=title,
+        slug=slug,
+        isbn=isbn if isbn and isbn != "None" and isbn != "" else None,
+        description=description if description and description != "None" and description != "" else None,
+        publication_year=publication_year_int,
+        pages=pages_int,
+        price=price_float,
+        original_price=original_price_float,
+        discount_percentage=discount_percentage,
+        stock_quantity=stock_quantity_int,
+        category_id=category_id_int,
+        publisher_id=publisher_id_int,
+        supplier_id=supplier_id_int,
+        language=language,
+        cover_type=cover_type,
+        is_active=True
+    )
+    
+    try:
+        db.add(new_book)
+        db.flush()  # Get the book ID
+        
+        # Create upload directory
+        upload_dir = "uploads/books"
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        uploaded_images = []
+        
+        # Upload each image
+        for index, file in enumerate(files):
+            file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+            unique_filename = f"{new_book.id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            image_url = f"{BASE_URL}/{file_path}"
+            
+            # Add image to database
+            new_image = BookImage(
+                book_id=new_book.id,
+                image_url=image_url,
+                sort_order=index,
+                is_primary=(index == 0)  # First image is primary
+            )
+            db.add(new_image)
+            
+            uploaded_images.append({
+                "id": new_image.id,
+                "image_url": image_url
+            })
+        
+        db.commit()
+        db.refresh(new_book)
+        
+        return {
+            "id": new_book.id,
+            "title": new_book.title,
+            "slug": new_book.slug,
+            "price": float(new_book.price),
+            "images": uploaded_images,
+            "message": "Sách và ảnh đã được tạo thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tạo sách: {str(e)}")
+
 @app.put("/api/books/{book_id}")
 async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends(get_db)):
     """Cập nhật thông tin sách (Admin only)"""
@@ -740,8 +997,6 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
         book.subtitle = book_data.subtitle
     if book_data.description is not None:
         book.description = book_data.description
-    if book_data.summary is not None:
-        book.summary = book_data.summary
     if book_data.price is not None:
         book.price = book_data.price
     if book_data.original_price is not None:
@@ -812,10 +1067,6 @@ async def get_book_reviews(book_id: int, skip: int = 0, limit: int = 20, db: Ses
                 "rating": review.rating,
                 "title": review.title,
                 "comment": review.comment,
-                "pros": review.pros,
-                "cons": review.cons,
-                "is_verified_purchase": review.is_verified_purchase,
-                "helpful_count": review.helpful_count,
                 "created_at": review.created_at
             }
             for review in reviews
@@ -851,9 +1102,6 @@ async def create_book_review(book_id: int, review_data: BookReviewCreate, user_i
         rating=review_data.rating,
         title=review_data.title,
         comment=review_data.comment,
-        pros=review_data.pros,
-        cons=review_data.cons,
-        is_verified_purchase=False,  # TODO: Check if user purchased this book
         is_approved=True
     )
     
@@ -1122,10 +1370,9 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
     # Calculate totals
     subtotal = sum(float(item.book.price * item.quantity) for item in cart_items)
     shipping_fee = 0  # TODO: Calculate based on address
-    tax_amount = 0  # TODO: Calculate tax
     discount_amount = 0  # TODO: Apply voucher discount
     
-    total_amount = subtotal + shipping_fee + tax_amount - discount_amount
+    total_amount = subtotal + shipping_fee - discount_amount
     
     # Generate order number
     order_number = generate_order_number()
@@ -1137,7 +1384,6 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         status="pending",
         subtotal=subtotal,
         shipping_fee=shipping_fee,
-        tax_amount=tax_amount,
         discount_amount=discount_amount,
         total_amount=total_amount,
         payment_method_id=order_data.payment_method_id,
@@ -1201,7 +1447,6 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
             "status": order.status,
             "subtotal": float(order.subtotal),
             "shipping_fee": float(order.shipping_fee),
-            "tax_amount": float(order.tax_amount),
             "discount_amount": float(order.discount_amount),
             "total_amount": float(order.total_amount),
             "payment_status": order.payment_status,
@@ -1368,8 +1613,7 @@ async def get_all_users(skip: int = 0, limit: int = 50, role: str = None, db: Se
                 "last_name": user.last_name,
                 "role": user.role.role_name if user.role else None,
                 "is_active": user.is_active,
-                "created_at": user.created_at,
-                "last_login": user.last_login
+                "created_at": user.created_at
             }
             for user in users
         ],
@@ -1500,7 +1744,6 @@ async def search_books(
             db.or_(
                 Book.title.ilike(f"%{q}%"),
                 Book.description.ilike(f"%{q}%"),
-                Book.summary.ilike(f"%{q}%")
             )
         )
     
@@ -1558,13 +1801,7 @@ async def search_books(
 # =====================================================
 # STARTUP EVENT
 # =====================================================
-
-@app.on_event("startup")
-async def startup_event():
-    """Khởi tạo khi app start"""
-    print("🚀 BookStore API đang khởi động...")
-    print("📚 API Documentation: http://localhost:8000/docs")
-    print("🔍 ReDoc: http://localhost:8000/redoc")
+# (Moved to top of file)
 
 if __name__ == "__main__":
     import uvicorn

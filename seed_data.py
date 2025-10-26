@@ -103,36 +103,26 @@ def seed_payment_methods(db):
         {
             'name': 'Cash on Delivery',
             'description': 'Thanh toán khi nhận hàng',
-            'processing_fee_percentage': 0,
-            'sort_order': 1,
             'is_active': True
         },
         {
             'name': 'Bank Transfer',
             'description': 'Chuyển khoản ngân hàng',
-            'processing_fee_percentage': 0,
-            'sort_order': 2,
             'is_active': True
         },
         {
             'name': 'Credit Card',
             'description': 'Thẻ tín dụng',
-            'processing_fee_percentage': 2.5,
-            'sort_order': 3,
             'is_active': True
         },
         {
             'name': 'E-Wallet',
             'description': 'Ví điện tử (MoMo, ZaloPay)',
-            'processing_fee_percentage': 1.5,
-            'sort_order': 4,
             'is_active': True
         },
         {
             'name': 'QR Code',
             'description': 'Quét mã QR',
-            'processing_fee_percentage': 0,
-            'sort_order': 5,
             'is_active': True
         }
     ]
@@ -175,43 +165,31 @@ def seed_publishers(db):
     publishers_data = [
         {
             'name': 'Nhà xuất bản Trẻ',
-            'description': 'Nhà xuất bản hàng đầu Việt Nam',
-            'website': 'https://nxbtre.com.vn',
             'contact_email': 'info@nxbtre.com.vn',
             'contact_phone': '02838229339'
         },
         {
             'name': 'Kim Đồng',
-            'description': 'Nhà xuất bản sách thiếu nhi',
-            'website': 'https://nxbkimdong.com.vn',
             'contact_email': 'info@nxbkimdong.com.vn',
             'contact_phone': '02438221351'
         },
         {
             'name': 'Nhã Nam',
-            'description': 'Nhà xuất bản sách văn học',
-            'website': 'https://nhanam.vn',
             'contact_email': 'info@nhanam.vn',
             'contact_phone': '02437712718'
         },
         {
             'name': 'Alpha Books',
-            'description': 'Nhà xuất bản sách kinh tế',
-            'website': 'https://alphabooks.vn',
             'contact_email': 'info@alphabooks.vn',
             'contact_phone': '02437712718'
         },
         {
             'name': 'First News',
-            'description': 'Nhà xuất bản sách phát triển bản thân',
-            'website': 'https://firstnews.com.vn',
             'contact_email': 'info@firstnews.com.vn',
             'contact_phone': '02838229339'
         },
         {
             'name': 'Thái Hà Books',
-            'description': 'Nhà xuất bản sách tâm lý',
-            'website': 'https://thaihabooks.com',
             'contact_email': 'info@thaihabooks.com',
             'contact_phone': '02437712718'
         }
@@ -233,27 +211,21 @@ def seed_suppliers(db):
             'contact_person': 'Nguyễn Văn A',
             'email': 'contact@abcbooks.com',
             'phone': '0123456789',
-            'address': '123 Đường ABC, Quận 1, TP.HCM',
-            'payment_terms': 'Net 30 days',
-            'credit_limit': 100000000
+            'address': '123 Đường ABC, Quận 1, TP.HCM'
         },
         {
             'name': 'Nhà phân phối Sách XYZ',
             'contact_person': 'Trần Thị B',
             'email': 'info@xyzbooks.com',
             'phone': '0987654321',
-            'address': '456 Đường XYZ, Quận 3, TP.HCM',
-            'payment_terms': 'Net 15 days',
-            'credit_limit': 50000000
+            'address': '456 Đường XYZ, Quận 3, TP.HCM'
         },
         {
             'name': 'Đại lý Sách DEF',
             'contact_person': 'Lê Văn C',
             'email': 'sales@defbooks.com',
             'phone': '0369258147',
-            'address': '789 Đường DEF, Quận 5, TP.HCM',
-            'payment_terms': 'Cash on delivery',
-            'credit_limit': 20000000
+            'address': '789 Đường DEF, Quận 5, TP.HCM'
         }
     ]
     
@@ -268,54 +240,16 @@ def seed_suppliers(db):
 def seed_authors(db):
     """Thêm các tác giả"""
     authors_data = [
-        {
-            'first_name': 'Nguyễn',
-            'last_name': 'Nhật Ánh',
-            'pen_name': 'Nguyễn Nhật Ánh',
-            'biography': 'Nhà văn nổi tiếng Việt Nam, chuyên viết truyện thiếu nhi',
-            'nationality': 'Việt Nam',
-            'birth_date': '1955-05-07'
-        },
-        {
-            'first_name': 'Paulo',
-            'last_name': 'Coelho',
-            'pen_name': 'Paulo Coelho',
-            'biography': 'Nhà văn Brazil nổi tiếng thế giới',
-            'nationality': 'Brazil',
-            'birth_date': '1947-08-24'
-        },
-        {
-            'first_name': 'Dale',
-            'last_name': 'Carnegie',
-            'pen_name': 'Dale Carnegie',
-            'biography': 'Tác giả nổi tiếng về phát triển bản thân',
-            'nationality': 'Mỹ',
-            'birth_date': '1888-11-24',
-            'death_date': '1955-11-01'
-        },
-        {
-            'first_name': 'Stephen',
-            'last_name': 'Covey',
-            'pen_name': 'Stephen Covey',
-            'biography': 'Tác giả của cuốn sách nổi tiếng "7 Habits of Highly Effective People"',
-            'nationality': 'Mỹ',
-            'birth_date': '1932-10-24',
-            'death_date': '2012-07-16'
-        },
-        {
-            'first_name': 'Yuval',
-            'last_name': 'Harari',
-            'pen_name': 'Yuval Noah Harari',
-            'biography': 'Nhà sử học và triết học người Israel',
-            'nationality': 'Israel',
-            'birth_date': '1976-02-24'
-        }
+        {'pen_name': 'Nguyễn Nhật Ánh', 'is_active': True},
+        {'pen_name': 'Paulo Coelho', 'is_active': True},
+        {'pen_name': 'Dale Carnegie', 'is_active': True},
+        {'pen_name': 'Stephen Covey', 'is_active': True},
+        {'pen_name': 'Yuval Noah Harari', 'is_active': True}
     ]
     
     for auth_data in authors_data:
         existing_auth = db.query(Author).filter(
-            Author.first_name == auth_data['first_name'],
-            Author.last_name == auth_data['last_name']
+            Author.pen_name == auth_data['pen_name']
         ).first()
         if not existing_auth:
             author = Author(**auth_data)
