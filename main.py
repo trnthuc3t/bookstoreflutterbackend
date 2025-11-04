@@ -167,6 +167,7 @@ class BookUpdate(BaseModel):
     description: Optional[str] = None
     price: Optional[float] = None
     original_price: Optional[float] = None
+    discount_percentage: Optional[float] = None
     stock_quantity: Optional[int] = None
     is_active: Optional[bool] = None
     is_featured: Optional[bool] = None
@@ -1162,13 +1163,36 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
         book.subtitle = book_data.subtitle
     if book_data.description is not None:
         book.description = book_data.description
-    if book_data.price is not None:
-        book.price = book_data.price
+    
+    # Handle price and discount logic
+    # First, update original_price if provided
     if book_data.original_price is not None:
         book.original_price = book_data.original_price
-        # Recalculate discount
-        if book_data.original_price > book_data.price:
-            book.discount_percentage = ((book_data.original_price - book_data.price) / book_data.original_price) * 100
+    
+    # Then handle discount or price update
+    if book_data.discount_percentage is not None:
+        # If discount_percentage is provided, calculate price from original_price
+        book.discount_percentage = book_data.discount_percentage
+        if book.original_price and book.original_price > 0:
+            book.price = book.original_price * (1 - book.discount_percentage / 100)
+            print(f"💰 Calculated price from discount: {book.original_price} * (1 - {book.discount_percentage}/100) = {book.price}")
+        else:
+            print(f"⚠️ Cannot calculate price: original_price is {book.original_price}")
+    elif book_data.price is not None:
+        # If price is provided directly
+        old_price = book.price
+        book.price = book_data.price
+        print(f"💰 Price updated: {old_price} -> {book.price}")
+        
+        # Recalculate discount percentage if we have original_price
+        if book.original_price and book.original_price > 0:
+            if book.price < book.original_price:
+                book.discount_percentage = ((book.original_price - book.price) / book.original_price) * 100
+                print(f"📊 Calculated discount: {book.discount_percentage}%")
+            else:
+                book.discount_percentage = 0
+                print(f"📊 No discount (price >= original_price)")
+    
     if book_data.stock_quantity is not None:
         book.stock_quantity = book_data.stock_quantity
     if book_data.is_active is not None:
@@ -1365,7 +1389,9 @@ async def create_author(pen_name: str, db: Session = Depends(get_db)):
 @app.get("/api/cart/{user_id}")
 async def get_cart(user_id: int, db: Session = Depends(get_db)):
     """Lấy giỏ hàng của người dùng"""
-    cart_items = db.query(CartItem).filter(CartItem.user_id == user_id).all()
+    cart_items = db.query(CartItem).options(
+        joinedload(CartItem.book).joinedload(Book.book_images)
+    ).filter(CartItem.user_id == user_id).all()
     
     return {
         "cart_items": [
@@ -1374,9 +1400,12 @@ async def get_cart(user_id: int, db: Session = Depends(get_db)):
                 "book_id": item.book_id,
                 "book_title": item.book.title,
                 "book_price": float(item.book.price),
+                "book_original_price": float(item.book.original_price) if item.book.original_price else float(item.book.price),
+                "discount_percentage": float(item.book.discount_percentage) if item.book.discount_percentage else 0,
+                "book_image": item.book.book_images[0].image_url if item.book.book_images else None,
                 "quantity": item.quantity,
                 "total_price": float(item.book.price * item.quantity),
-                "added_at": item.added_at
+                "added_at": item.added_at.isoformat() if item.added_at else None
             }
             for item in cart_items
         ],
@@ -1730,43 +1759,56 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    # Get order items
-    order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
+    # Get order items with book information
+    order_items = db.query(OrderItem).options(
+        joinedload(OrderItem.book).joinedload(Book.book_images)
+    ).filter(OrderItem.order_id == order_id).all()
     
     return {
-        "order": {
-            "id": order.id,
-            "order_number": order.order_number,
-            "status": order.status,
-            "subtotal": float(order.subtotal),
-            "shipping_fee": float(order.shipping_fee),
-            "discount_amount": float(order.discount_amount),
-            "total_amount": float(order.total_amount),
-            "payment_status": order.payment_status,
-            "payment_method": order.payment_method.name if order.payment_method else None,
-            "shipping_address": {
-                "recipient_name": order.shipping_address.recipient_name,
-                "phone": order.shipping_address.phone,
-                "address_line1": order.shipping_address.address_line1,
-                "address_line2": order.shipping_address.address_line2,
-                "city": order.shipping_address.city,
-                "district": order.shipping_address.district,
-                "ward": order.shipping_address.ward
-            } if order.shipping_address else None,
-            "tracking_number": order.tracking_number,
-            "notes": order.notes,
-            "created_at": order.created_at,
-            "shipped_at": order.shipped_at,
-            "delivered_at": order.delivered_at
-        },
+        "id": order.id,
+        "order_number": order.order_number,
+        "status": order.status,
+        "subtotal": float(order.subtotal),
+        "shipping_fee": float(order.shipping_fee),
+        "discount_amount": float(order.discount_amount),
+        "total_amount": float(order.total_amount),
+        "payment_status": order.payment_status,
+        "payment_method": order.payment_method.name if order.payment_method else None,
+        "shipping_address": {
+            "recipient_name": order.shipping_address.recipient_name,
+            "phone": order.shipping_address.phone,
+            "address_line1": order.shipping_address.address_line1,
+            "address_line2": order.shipping_address.address_line2,
+            "city": order.shipping_address.city,
+            "district": order.shipping_address.district,
+            "ward": order.shipping_address.ward
+        } if order.shipping_address else None,
+        "tracking_number": order.tracking_number,
+        "notes": order.notes,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
+        "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
         "items": [
             {
                 "id": item.id,
                 "book_id": item.book_id,
-                "book_title": item.book.title,
                 "quantity": item.quantity,
                 "unit_price": float(item.unit_price),
-                "total_price": float(item.total_price)
+                "discount_amount": float(item.discount_amount),
+                "total_price": float(item.total_price),
+                "book": {
+                    "id": item.book.id,
+                    "title": item.book.title,
+                    "images": [
+                        {
+                            "id": img.id,
+                            "image_url": img.image_url,
+                            "is_primary": img.is_primary,
+                            "sort_order": img.sort_order
+                        }
+                        for img in sorted(item.book.book_images, key=lambda x: (not x.is_primary, x.sort_order))
+                    ] if item.book.book_images else []
+                } if item.book else None
             }
             for item in order_items
         ]
