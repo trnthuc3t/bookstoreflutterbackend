@@ -9,8 +9,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware import Middleware
 from starlette.requests import Request
-from sqlalchemy.orm import Session
-from sqlalchemy import text
+from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import text, func
 import os
 from dotenv import load_dotenv
 from pydantic import BaseModel, EmailStr
@@ -28,7 +28,7 @@ load_dotenv()
 # Get base URL from environment or use default
 # To change URL, set environment variable: export BASE_URL="new_url_here"
 # Or update this default value
-BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-8000.asse.devtunnels.ms')
+BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-7000.asse.devtunnels.ms')
 print(f"Using BASE_URL: {BASE_URL}")
 
 # Import database and models
@@ -83,9 +83,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Create uploads directory if it doesn't exist
+upload_dir = os.path.join(os.getcwd(), "uploads")
+if not os.path.exists(upload_dir):
+    os.makedirs(upload_dir, exist_ok=True)
+    print(f"📁 Created uploads directory: {upload_dir}")
+
 # Mount static files for uploaded images
-if os.path.exists("uploads"):
+try:
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
+    print("✅ Static files mounted at /uploads")
+except Exception as e:
+    print(f"⚠️ Could not mount static files: {e}")
 
 # Security
 security = HTTPBearer()
@@ -679,15 +688,24 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         for ba in book.book_authors
     ]
     
-    # Lấy images
-    images = [
-        {
-            "id": img.id,
-            "url": img.image_url,
-            "is_primary": img.is_primary
-        }
-        for img in book.book_images
-    ]
+    # Lấy images - sắp xếp theo sort_order và is_primary
+    images = sorted(
+        [
+            {
+                "id": img.id,
+                "url": img.image_url,
+                "is_primary": img.is_primary,
+                "sort_order": img.sort_order
+            }
+            for img in book.book_images
+        ],
+        key=lambda x: (x['is_primary'], x['sort_order'])
+    )
+    
+    # Lấy ảnh chính (primary image)
+    primary_image = None
+    if images:
+        primary_image = next((img for img in images if img['is_primary']), images[0])
     
     return {
         "id": book.id,
@@ -706,20 +724,61 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "publication_year": book.publication_year,
         "cover_type": book.cover_type,
         "language": book.language,
+        # Dimensions and weight
+        "length": float(book.length) if book.length else None,
+        "width": float(book.width) if book.width else None,
+        "thickness": float(book.thickness) if book.thickness else None,
+        "weight": book.weight,
         "category": {
             "id": book.category.id,
             "name": book.category.name,
             "slug": book.category.slug
         } if book.category else None,
+        "category_id": book.category_id,
         "publisher": {
             "id": book.publisher.id,
             "name": book.publisher.name
         } if book.publisher else None,
         "authors": authors,
         "images": images,
+        "primary_image": primary_image,
+        "is_active": book.is_active,
         "is_featured": book.is_featured,
         "is_bestseller": book.is_bestseller,
         "created_at": book.created_at
+    }
+
+@app.get("/api/books/{book_id}/images")
+async def get_book_images(book_id: int, db: Session = Depends(get_db)):
+    """Lấy danh sách ảnh của sách theo ID"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    # Lấy images - sắp xếp theo sort_order và is_primary
+    images = sorted(
+        [
+            {
+                "id": img.id,
+                "url": img.image_url,
+                "is_primary": img.is_primary,
+                "sort_order": img.sort_order,
+                "created_at": img.created_at
+            }
+            for img in book.book_images
+        ],
+        key=lambda x: (x['is_primary'], x['sort_order'])
+    )
+    
+    # Lấy ảnh chính
+    primary_image = next((img for img in images if img['is_primary']), images[0] if images else None)
+    
+    return {
+        "book_id": book_id,
+        "book_title": book.title,
+        "images": images,
+        "primary_image": primary_image,
+        "total_images": len(images)
     }
 
 @app.post("/api/books/{book_id}/images")
@@ -783,8 +842,11 @@ async def upload_book_image(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Lưu URL vào database
-        image_url = f"{BASE_URL}/{file_path}"
+        # Convert Windows path to URL path
+        url_path = file_path.replace("\\", "/")
+        image_url = f"{BASE_URL}/{url_path}"
+        
+        print(f"📸 Image saved with URL: {image_url}")  # Debug log
         new_image = BookImage(
             book_id=book_id,
             image_url=image_url,
@@ -807,6 +869,73 @@ async def upload_book_image(
         # Xóa file nếu có lỗi
         if os.path.exists(file_path):
             os.remove(file_path)
+        raise HTTPException(status_code=500, detail=f"Lỗi khi upload ảnh: {str(e)}")
+
+@app.post("/api/books/{book_id}/upload-multiple-images")
+async def upload_multiple_book_images(
+    book_id: int,
+    files: List[UploadFile] = File(...),
+    db: Session = Depends(get_db)
+):
+    """Upload nhiều ảnh cho sách đã tồn tại"""
+    # Kiểm tra sách tồn tại
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    # Tạo thư mục upload nếu chưa có
+    upload_dir = "uploads/books"
+    os.makedirs(upload_dir, exist_ok=True)
+    
+    uploaded_images = []
+    
+    try:
+        # Get current max sort_order
+        existing_images = db.query(BookImage).filter(BookImage.book_id == book_id).all()
+        max_sort_order = max([img.sort_order for img in existing_images], default=-1)
+        
+        # Upload each image
+        for index, file in enumerate(files):
+            file_extension = file.filename.split('.')[-1] if '.' in file.filename else 'jpg'
+            unique_filename = f"{book_id}_{uuid.uuid4().hex[:8]}.{file_extension}"
+            file_path = os.path.join(upload_dir, unique_filename)
+            
+            with open(file_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            
+            # Convert Windows path to URL path
+            url_path = file_path.replace("\\", "/")
+            image_url = f"{BASE_URL}/{url_path}"
+            
+            print(f"📸 Saving image {index+1} with URL: {image_url}")
+            
+            # Add image to database
+            new_image = BookImage(
+                book_id=book_id,
+                image_url=image_url,
+                sort_order=max_sort_order + index + 1,
+                is_primary=False  # New images are not primary by default
+            )
+            db.add(new_image)
+            
+            uploaded_images.append({
+                "url": image_url,
+                "sort_order": max_sort_order + index + 1
+            })
+        
+        db.commit()
+        
+        print(f"✅ Uploaded {len(uploaded_images)} images for book #{book_id}")
+        
+        return {
+            "book_id": book_id,
+            "uploaded_count": len(uploaded_images),
+            "images": uploaded_images,
+            "message": f"Đã upload {len(uploaded_images)} ảnh thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error uploading images: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi upload ảnh: {str(e)}")
 
 @app.post("/api/books")
@@ -876,6 +1005,11 @@ async def create_book_with_image(
     supplier_id: str = Form(None),
     language: str = Form("Vietnamese"),
     cover_type: str = Form("paperback"),
+    length: str = Form(None),
+    width: str = Form(None),
+    thickness: str = Form(None),
+    weight: str = Form(None),
+    author_ids: str = Form(None),  # Comma-separated author IDs
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
@@ -891,6 +1025,11 @@ async def create_book_with_image(
         category_id_int = int(category_id) if category_id and category_id != "None" and category_id != "" else None
         publisher_id_int = int(publisher_id) if publisher_id and publisher_id != "None" and publisher_id != "" else None
         supplier_id_int = int(supplier_id) if supplier_id and supplier_id != "None" and supplier_id != "" else None
+        # Parse dimensions and weight
+        length_float = float(length) if length and length != "None" and length != "" else None
+        width_float = float(width) if width and width != "None" and width != "" else None
+        thickness_float = float(thickness) if thickness and thickness != "None" and thickness != "" else None
+        weight_int = int(weight) if weight and weight != "None" and weight != "" else None
     except (ValueError, TypeError) as e:
         raise HTTPException(status_code=400, detail=f"Invalid numeric values: {str(e)}")
     
@@ -925,6 +1064,10 @@ async def create_book_with_image(
         supplier_id=supplier_id_int,
         language=language,
         cover_type=cover_type,
+        length=length_float,
+        width=width_float,
+        thickness=thickness_float,
+        weight=weight_int,
         is_active=True
     )
     
@@ -947,7 +1090,11 @@ async def create_book_with_image(
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            image_url = f"{BASE_URL}/{file_path}"
+            # Convert Windows path to URL path
+            url_path = file_path.replace("\\", "/")
+            image_url = f"{BASE_URL}/{url_path}"
+            
+            print(f"📸 Saving image with URL: {image_url}")  # Debug log
             
             # Add image to database
             new_image = BookImage(
@@ -960,8 +1107,26 @@ async def create_book_with_image(
             
             uploaded_images.append({
                 "id": new_image.id,
-                "image_url": image_url
+                "url": image_url,  # Changed from "image_url" to "url" to match API response
+                "is_primary": (index == 0)
             })
+        
+        # Add authors if provided
+        if author_ids and author_ids.strip():
+            author_id_list = [int(aid.strip()) for aid in author_ids.split(',') if aid.strip()]
+            print(f"👤 Adding {len(author_id_list)} authors to book")
+            
+            for author_id in author_id_list:
+                # Check if author exists
+                author = db.query(Author).filter(Author.id == author_id).first()
+                if author:
+                    book_author = BookAuthor(
+                        book_id=new_book.id,
+                        author_id=author_id,
+                        role='author'
+                    )
+                    db.add(book_author)
+                    print(f"✅ Added author: {author.pen_name}")
         
         db.commit()
         db.refresh(new_book)
@@ -1148,6 +1313,50 @@ async def get_categories(db: Session = Depends(get_db)):
             for cat in categories
         ]
     }
+
+# =====================================================
+# AUTHOR ENDPOINTS
+# =====================================================
+
+@app.get("/api/authors")
+async def get_authors(db: Session = Depends(get_db)):
+    """Lấy danh sách tác giả"""
+    authors = db.query(Author).filter(Author.is_active == True).all()
+    
+    return {
+        "authors": [
+            {
+                "id": author.id,
+                "pen_name": author.pen_name,
+                "created_at": author.created_at.isoformat() if author.created_at else None
+            }
+            for author in authors
+        ]
+    }
+
+@app.post("/api/authors")
+async def create_author(pen_name: str, db: Session = Depends(get_db)):
+    """Tạo tác giả mới"""
+    # Check if author exists
+    existing = db.query(Author).filter(Author.pen_name == pen_name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Tác giả đã tồn tại")
+    
+    new_author = Author(pen_name=pen_name, is_active=True)
+    
+    try:
+        db.add(new_author)
+        db.commit()
+        db.refresh(new_author)
+        
+        return {
+            "id": new_author.id,
+            "pen_name": new_author.pen_name,
+            "message": "Tác giả đã được tạo thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tạo tác giả: {str(e)}")
 
 # =====================================================
 # CART ENDPOINTS
@@ -1342,22 +1551,30 @@ async def remove_from_wishlist(wishlist_item_id: int, db: Session = Depends(get_
 @app.get("/api/orders/{user_id}")
 async def get_user_orders(user_id: int, db: Session = Depends(get_db)):
     """Lấy đơn hàng của người dùng"""
-    orders = db.query(Order).filter(Order.user_id == user_id).all()
-    
-    return {
-        "orders": [
-            {
-                "id": order.id,
-                "order_number": order.order_number,
-                "status": order.status,
-                "total_amount": float(order.total_amount),
-                "payment_status": order.payment_status,
-                "created_at": order.created_at,
-                "items_count": len(order.order_items)
-            }
-            for order in orders
-        ]
-    }
+    try:
+        orders = db.query(Order).options(
+            joinedload(Order.order_items)
+        ).filter(Order.user_id == user_id).order_by(Order.created_at.desc()).all()
+        
+        return {
+            "orders": [
+                {
+                    "id": order.id,
+                    "order_number": order.order_number,
+                    "status": order.status,
+                    "total_amount": float(order.total_amount),
+                    "payment_status": order.payment_status,
+                    "created_at": order.created_at.isoformat() if order.created_at else None,
+                    "items_count": len(order.order_items) if order.order_items else 0
+                }
+                for order in orders
+            ]
+        }
+    except Exception as e:
+        print(f"❌ Get user orders error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
 
 @app.post("/api/orders")
 async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
@@ -1430,6 +1647,82 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
 
+@app.post("/api/orders/simple")
+async def create_simple_order(user_id: int, payment_method: str = "COD", notes: str = None, db: Session = Depends(get_db)):
+    """Tạo đơn hàng đơn giản từ giỏ hàng (không cần address_id, payment_method_id)"""
+    try:
+        # Get user's cart items
+        cart_items = db.query(CartItem).filter(CartItem.user_id == user_id).all()
+        if not cart_items:
+            raise HTTPException(status_code=400, detail="Cart is empty")
+        
+        # Calculate totals
+        subtotal = sum(float(item.book.price * item.quantity) for item in cart_items)
+        shipping_fee = 0
+        discount_amount = 0
+        total_amount = subtotal + shipping_fee - discount_amount
+        
+        # Generate order number
+        order_number = generate_order_number()
+        
+        # Create order without requiring address_id and payment_method_id
+        new_order = Order(
+            order_number=order_number,
+            user_id=user_id,
+            status="pending",
+            subtotal=subtotal,
+            shipping_fee=shipping_fee,
+            discount_amount=discount_amount,
+            total_amount=total_amount,
+            payment_method_id=None,  # Optional
+            payment_status="pending",
+            voucher_id=None,
+            shipping_address_id=None,  # Optional
+            notes=notes or f"Payment: {payment_method}"
+        )
+        
+        db.add(new_order)
+        db.flush()
+        
+        # Create order items
+        for cart_item in cart_items:
+            order_item = OrderItem(
+                order_id=new_order.id,
+                book_id=cart_item.book_id,
+                quantity=cart_item.quantity,
+                unit_price=cart_item.book.price,
+                total_price=cart_item.book.price * cart_item.quantity
+            )
+            db.add(order_item)
+            
+            # Update book stock
+            if cart_item.book.stock_quantity >= cart_item.quantity:
+                cart_item.book.stock_quantity -= cart_item.quantity
+                cart_item.book.sold_quantity = (cart_item.book.sold_quantity or 0) + cart_item.quantity
+        
+        # Clear cart
+        for cart_item in cart_items:
+            db.delete(cart_item)
+        
+        db.commit()
+        db.refresh(new_order)
+        
+        return {
+            "id": new_order.id,
+            "order_number": new_order.order_number,
+            "total_amount": float(new_order.total_amount),
+            "status": new_order.status,
+            "payment_status": new_order.payment_status,
+            "created_at": new_order.created_at.isoformat() if new_order.created_at else None,
+            "message": "Order created successfully"
+        }
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Create simple order error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
+
 @app.get("/api/orders/{order_id}/details")
 async def get_order_details(order_id: int, db: Session = Depends(get_db)):
     """Lấy chi tiết đơn hàng"""
@@ -1482,36 +1775,52 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
 @app.put("/api/orders/{order_id}")
 async def update_order(order_id: int, order_data: OrderUpdate, db: Session = Depends(get_db)):
     """Cập nhật trạng thái đơn hàng (Admin only)"""
-    order = db.query(Order).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    
-    # Update fields
-    if order_data.status is not None:
-        order.status = order_data.status
-        
-        # Set timestamps based on status
-        if order_data.status == "shipped":
-            order.shipped_at = datetime.utcnow()
-        elif order_data.status == "delivered":
-            order.delivered_at = datetime.utcnow()
-    
-    if order_data.payment_status is not None:
-        order.payment_status = order_data.payment_status
-    
-    if order_data.tracking_number is not None:
-        order.tracking_number = order_data.tracking_number
-    
-    if order_data.notes is not None:
-        order.notes = order_data.notes
-    
-    order.updated_at = datetime.utcnow()
-    
     try:
+        print(f"🔄 Backend: Updating order #{order_id}")
+        print(f"📝 Request data: {order_data.dict()}")
+        
+        order = db.query(Order).filter(Order.id == order_id).first()
+        if not order:
+            print(f"❌ Order #{order_id} not found")
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        print(f"📊 Current order status: {order.status}")
+        
+        # Update fields
+        if order_data.status is not None:
+            old_status = order.status
+            order.status = order_data.status
+            print(f"🔄 Updating status: {old_status} → {order_data.status}")
+            
+            # Set timestamps based on status
+            if order_data.status == "shipped":
+                order.shipped_at = datetime.utcnow()
+            elif order_data.status == "delivered":
+                order.delivered_at = datetime.utcnow()
+            elif order_data.status == "cancelled":
+                order.cancelled_at = datetime.utcnow()
+        
+        if order_data.payment_status is not None:
+            order.payment_status = order_data.payment_status
+        
+        if order_data.tracking_number is not None:
+            order.tracking_number = order_data.tracking_number
+        
+        if order_data.notes is not None:
+            order.notes = order_data.notes
+        
+        order.updated_at = datetime.utcnow()
+        
         db.commit()
-        return {"message": "Order updated successfully"}
+        print(f"✅ Order #{order_id} updated successfully to: {order.status}")
+        return {"message": "Order updated successfully", "order_id": order_id, "new_status": order.status}
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
+        print(f"❌ Error updating order #{order_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error updating order: {str(e)}")
 
 @app.post("/api/orders/{order_id}/cancel")
@@ -1568,30 +1877,39 @@ async def get_stats(db: Session = Depends(get_db)):
 @app.get("/api/admin/orders")
 async def get_all_orders(skip: int = 0, limit: int = 50, status: str = None, db: Session = Depends(get_db)):
     """Lấy tất cả đơn hàng (Admin only)"""
-    query = db.query(Order)
-    
-    if status:
-        query = query.filter(Order.status == status)
-    
-    orders = query.offset(skip).limit(limit).all()
-    
-    return {
-        "orders": [
-            {
-                "id": order.id,
-                "order_number": order.order_number,
-                "user_name": f"{order.user.first_name} {order.user.last_name}",
-                "user_email": order.user.email,
-                "status": order.status,
-                "total_amount": float(order.total_amount),
-                "payment_status": order.payment_status,
-                "created_at": order.created_at,
-                "items_count": len(order.order_items)
-            }
-            for order in orders
-        ],
-        "total": len(orders)
-    }
+    try:
+        query = db.query(Order).options(
+            joinedload(Order.user),
+            joinedload(Order.order_items)
+        )
+        
+        if status:
+            query = query.filter(Order.status == status)
+        
+        orders = query.offset(skip).limit(limit).all()
+        
+        return {
+            "orders": [
+                {
+                    "id": order.id,
+                    "order_number": order.order_number,
+                    "user_name": f"{order.user.first_name or ''} {order.user.last_name or ''}".strip() if order.user else "Unknown",
+                    "user_email": order.user.email if order.user else "unknown@email.com",
+                    "status": order.status,
+                    "total_amount": float(order.total_amount),
+                    "payment_status": order.payment_status,
+                    "created_at": order.created_at.isoformat() if order.created_at else None,
+                    "items_count": len(order.order_items) if order.order_items else 0
+                }
+                for order in orders
+            ],
+            "total": len(orders)
+        }
+    except Exception as e:
+        print(f"❌ Get orders error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
 
 @app.get("/api/admin/users")
 async def get_all_users(skip: int = 0, limit: int = 50, role: str = None, db: Session = Depends(get_db)):
@@ -1613,7 +1931,7 @@ async def get_all_users(skip: int = 0, limit: int = 50, role: str = None, db: Se
                 "last_name": user.last_name,
                 "role": user.role.role_name if user.role else None,
                 "is_active": user.is_active,
-                "created_at": user.created_at
+                "created_at": user.created_at.isoformat() if user.created_at else None
             }
             for user in users
         ],
@@ -1660,7 +1978,7 @@ async def get_all_books_admin(skip: int = 0, limit: int = 50, is_active: bool = 
                 "is_bestseller": book.is_bestseller,
                 "rating_average": float(book.rating_average),
                 "rating_count": book.rating_count,
-                "created_at": book.created_at
+                "created_at": book.created_at.isoformat() if book.created_at else None
             }
             for book in books
         ],
@@ -1670,55 +1988,65 @@ async def get_all_books_admin(skip: int = 0, limit: int = 50, is_active: bool = 
 @app.get("/api/admin/dashboard")
 async def get_admin_dashboard(db: Session = Depends(get_db)):
     """Lấy thống kê dashboard admin"""
-    # Basic stats
-    total_users = db.query(User).count()
-    total_books = db.query(Book).count()
-    total_orders = db.query(Order).count()
-    total_revenue = db.query(Order).filter(Order.payment_status == "paid").with_entities(
-        db.func.sum(Order.total_amount)
-    ).scalar() or 0
-    
-    # Recent orders
-    recent_orders = db.query(Order).order_by(Order.created_at.desc()).limit(5).all()
-    
-    # Top selling books
-    top_books = db.query(Book).order_by(Book.sold_quantity.desc()).limit(5).all()
-    
-    # Order status distribution
-    order_statuses = db.query(Order.status, db.func.count(Order.id)).group_by(Order.status).all()
-    
-    return {
-        "stats": {
-            "total_users": total_users,
-            "total_books": total_books,
-            "total_orders": total_orders,
-            "total_revenue": float(total_revenue)
-        },
-        "recent_orders": [
-            {
-                "id": order.id,
-                "order_number": order.order_number,
-                "user_name": f"{order.user.first_name} {order.user.last_name}",
-                "total_amount": float(order.total_amount),
-                "status": order.status,
-                "created_at": order.created_at
-            }
-            for order in recent_orders
-        ],
-        "top_books": [
-            {
-                "id": book.id,
-                "title": book.title,
-                "sold_quantity": book.sold_quantity,
-                "price": float(book.price)
-            }
-            for book in top_books
-        ],
-        "order_statuses": [
-            {"status": status, "count": count}
-            for status, count in order_statuses
-        ]
-    }
+    try:
+        # Basic stats
+        total_users = db.query(User).count()
+        total_books = db.query(Book).count()
+        total_orders = db.query(Order).count()
+        total_revenue = db.query(Order).filter(Order.payment_status == "paid").with_entities(
+            func.sum(Order.total_amount)
+        ).scalar() or 0
+        
+        # Recent orders with eager loading
+        recent_orders = db.query(Order).options(
+            joinedload(Order.user)
+        ).order_by(Order.created_at.desc()).limit(5).all()
+        
+        # Top selling books
+        top_books = db.query(Book).order_by(Book.sold_quantity.desc()).limit(5).all()
+        
+        # Order status distribution
+        order_statuses = db.query(Order.status, func.count(Order.id)).group_by(Order.status).all()
+        
+        return {
+            "stats": {
+                "total_users": total_users,
+                "total_books": total_books,
+                "total_orders": total_orders,
+                "total_revenue": float(total_revenue)
+            },
+            "recent_orders": [
+                {
+                    "id": order.id,
+                    "order_number": order.order_number,
+                    "user_name": f"{order.user.first_name or ''} {order.user.last_name or ''}".strip() if order.user else "Unknown",
+                    "user_email": order.user.email if order.user else "unknown@email.com",
+                    "total_amount": float(order.total_amount),
+                    "status": order.status,
+                    "payment_status": order.payment_status,
+                    "created_at": order.created_at.isoformat() if order.created_at else None
+                }
+                for order in recent_orders
+            ],
+            "top_books": [
+                {
+                    "id": book.id,
+                    "title": book.title,
+                    "sold_quantity": book.sold_quantity or 0,
+                    "price": float(book.price)
+                }
+                for book in top_books
+            ],
+            "order_statuses": [
+                {"status": status or "unknown", "count": count}
+                for status, count in order_statuses
+            ]
+        }
+    except Exception as e:
+        print(f"❌ Dashboard error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Dashboard error: {str(e)}")
 
 # =====================================================
 # SEARCH ENDPOINTS
@@ -1805,6 +2133,8 @@ async def search_books(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv('PORT', 7000))
+    print(f"🚀 Starting server on port {port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 

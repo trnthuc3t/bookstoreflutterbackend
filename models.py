@@ -155,6 +155,7 @@ class Book(Base):
     
     id = Column(Integer, primary_key=True)
     title = Column(String(200), nullable=False)
+    subtitle = Column(String(200))
     slug = Column(String(200), unique=True, nullable=False)
     isbn = Column(String(20), unique=True)
     description = Column(Text)
@@ -162,6 +163,13 @@ class Book(Base):
     pages = Column(Integer)
     cover_type = Column(String(20))
     language = Column(String(20), default='Vietnamese')
+    
+    # Dimensions (cm) and Weight (grams)
+    length = Column(Decimal(5, 2))  # Length in cm
+    width = Column(Decimal(5, 2))   # Width in cm
+    thickness = Column(Decimal(5, 2))  # Thickness in cm
+    weight = Column(Integer)  # Weight in grams
+    
     price = Column(Decimal(10, 2), nullable=False)
     original_price = Column(Decimal(10, 2))
     discount_percentage = Column(Decimal(5, 2), default=0)
