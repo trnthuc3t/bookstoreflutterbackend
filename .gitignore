@@ -65,3 +65,7 @@ media/
 .pytest_cache/
 .coverage
 htmlcov/
+
+.claude/settings.local.json
+migration_add_order_id_to_reviews.sql
+env_example.txt

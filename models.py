@@ -1,7 +1,3 @@
-# =====================================================
-# SQLALCHEMY MODELS CHO DATABASE BÁN SÁCH ONLINE - PHIÊN BẢN TỐI ƯU
-# PostgreSQL Database Models - Optimized Version
-# =====================================================
 
 from sqlalchemy import (
     Column, Integer, String, Text, Boolean, DateTime, Date, 
@@ -17,9 +13,7 @@ import uuid
 
 Base = declarative_base()
 
-# =====================================================
 # 1. HỆ THỐNG NGƯỜI DÙNG VÀ PHÂN QUYỀN
-# =====================================================
 
 class UserRole(Base):
     __tablename__ = 'user_roles'
@@ -90,9 +84,45 @@ class UserAddress(Base):
     user = relationship("User", back_populates="addresses")
     orders = relationship("Order", back_populates="shipping_address")
 
-# =====================================================
+class EmailVerificationToken(Base):
+    __tablename__ = 'email_verification_tokens'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    token = Column(String(100), unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id])
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_email_token', 'token'),
+        Index('idx_email_token_user', 'user_id'),
+    )
+
+class PasswordResetToken(Base):
+    __tablename__ = 'password_reset_tokens'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    token = Column(String(100), unique=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id])
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_reset_token', 'token'),
+        Index('idx_reset_token_user', 'user_id'),
+    )
+
 # 2. QUẢN LÝ SẢN PHẨM SÁCH
-# =====================================================
 
 class Publisher(Base):
     __tablename__ = 'publishers'
@@ -245,9 +275,7 @@ class BookImage(Base):
     # Relationships
     book = relationship("Book", back_populates="book_images")
 
-# =====================================================
 # 3. HỆ THỐNG ĐÁNH GIÁ VÀ REVIEW
-# =====================================================
 
 class BookReview(Base):
     __tablename__ = 'book_reviews'
@@ -255,6 +283,7 @@ class BookReview(Base):
     id = Column(Integer, primary_key=True)
     book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    order_id = Column(Integer, ForeignKey('orders.id', ondelete='SET NULL'), nullable=True)  # Added order_id
     rating = Column(Integer)
     title = Column(String(200))
     comment = Column(Text)
@@ -264,12 +293,14 @@ class BookReview(Base):
     # Relationships
     book = relationship("Book", back_populates="reviews")
     user = relationship("User", back_populates="reviews")
+    order = relationship("Order")  # Added order relationship
     
     # Constraints
     __table_args__ = (
-        UniqueConstraint('book_id', 'user_id'),
+        UniqueConstraint('book_id', 'user_id', 'order_id'),  # Changed: allow multiple reviews per book if different orders
         Index('idx_reviews_book', 'book_id'),
         Index('idx_reviews_user', 'user_id'),
+        Index('idx_reviews_order', 'order_id'),  # Added order index
         Index('idx_reviews_rating', 'rating'),
         CheckConstraint("rating >= 1 AND rating <= 5"),
     )
@@ -292,9 +323,7 @@ class ReviewRating(Base):
         UniqueConstraint('review_id', 'user_id'),
     )
 
-# =====================================================
 # 4. HỆ THỐNG GIỎ HÀNG VÀ WISHLIST
-# =====================================================
 
 class CartItem(Base):
     __tablename__ = 'cart_items'
@@ -335,9 +364,7 @@ class WishlistItem(Base):
         Index('idx_wishlist_user', 'user_id'),
     )
 
-# =====================================================
 # 5. HỆ THỐNG VOUCHER VÀ KHUYẾN MÃI
-# =====================================================
 
 class Voucher(Base):
     __tablename__ = 'vouchers'
@@ -388,9 +415,7 @@ class VoucherUsage(Base):
     user = relationship("User")
     order = relationship("Order")
 
-# =====================================================
 # 6. HỆ THỐNG THANH TOÁN VÀ ĐƠN HÀNG
-# =====================================================
 
 class PaymentMethod(Base):
     __tablename__ = 'payment_methods'
@@ -487,9 +512,7 @@ class OrderHistory(Base):
     order = relationship("Order", back_populates="order_history")
     creator = relationship("User")
 
-# =====================================================
 # HOÀN THÀNH CÁC MODELS
-# =====================================================
 
 # Tạo sequence cho order number
 order_number_seq = Sequence('order_number_seq', start=1)

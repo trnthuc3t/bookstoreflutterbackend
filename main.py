@@ -5,7 +5,7 @@
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -19,6 +19,7 @@ import bcrypt
 from datetime import datetime, timedelta
 import re
 import uuid
+import secrets
 from typing import Optional, List
 import shutil
 
@@ -34,6 +35,7 @@ print(f"Using BASE_URL: {BASE_URL}")
 # Import database and models
 from database import get_db, engine, Base
 from models import *
+from email_service import EmailService
 
 # Create FastAPI app
 app = FastAPI(
@@ -349,6 +351,30 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(new_user)
         
+        # Tạo verification token
+        verification_token = secrets.token_urlsafe(32)
+        token_expires = datetime.utcnow() + timedelta(hours=24)
+        
+        email_token = EmailVerificationToken(
+            user_id=new_user.id,
+            token=verification_token,
+            expires_at=token_expires
+        )
+        db.add(email_token)
+        db.commit()
+        
+        # Gửi email xác thực
+        verification_link = f"{BASE_URL}/api/auth/verify-email/{verification_token}"
+        try:
+            EmailService.send_verification_email(
+                to_email=new_user.email,
+                username=new_user.username,
+                verification_link=verification_link
+            )
+            print(f"📧 Verification email sent to {new_user.email}")
+        except Exception as e:
+            print(f"⚠️ Failed to send verification email: {str(e)}")
+        
         # Get role name
         role_name = None
         if new_user.role:
@@ -433,6 +459,478 @@ async def check_email(email: str, db: Session = Depends(get_db)):
         "available": user is None,
         "message": "Email có sẵn" if user is None else "Email đã được sử dụng"
     }
+
+@app.get("/api/auth/verify-email/{token}", response_class=HTMLResponse)
+async def verify_email(token: str, db: Session = Depends(get_db)):
+    """Xác thực email bằng token - Trả về HTML cho browser"""
+    
+    # Tìm token
+    email_token = db.query(EmailVerificationToken).filter(
+        EmailVerificationToken.token == token,
+        EmailVerificationToken.is_used == False
+    ).first()
+    
+    if not email_token:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Xác thực thất bại - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #f44336; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Xác thực thất bại</h1>
+                <p>Token không hợp lệ hoặc đã được sử dụng. Vui lòng thử đăng ký lại hoặc liên hệ hỗ trợ.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+    
+    # Kiểm tra token đã hết hạn chưa
+    if datetime.utcnow() > email_token.expires_at:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Token hết hạn - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #ff9800; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">⏰</div>
+                <h1>Token đã hết hạn</h1>
+                <p>Link xác thực đã hết hạn sau 24 giờ. Vui lòng đăng nhập và yêu cầu gửi lại email xác thực.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+    
+    # Lấy user
+    user = db.query(User).filter(User.id == email_token.user_id).first()
+    if not user:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Lỗi - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #f44336; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Lỗi</h1>
+                <p>Người dùng không tồn tại. Vui lòng liên hệ hỗ trợ.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=404)
+    
+    # Cập nhật user
+    user.email_verified = True
+    email_token.is_used = True
+    
+    try:
+        db.commit()
+        
+        # Gửi email chào mừng
+        try:
+            EmailService.send_welcome_email(user.email, user.username)
+        except Exception as e:
+            print(f"⚠️ Failed to send welcome email: {str(e)}")
+        
+        # Trả về HTML thành công
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Xác thực thành công - BookStore</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }}
+                .container {{ background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }}
+                .icon {{ font-size: 60px; margin-bottom: 20px; }}
+                h1 {{ color: #4CAF50; margin-bottom: 20px; }}
+                p {{ color: #666; line-height: 1.6; margin-bottom: 10px; }}
+                .username {{ font-weight: bold; color: #2196F3; }}
+                .info {{ background: #f0f9ff; padding: 15px; border-radius: 8px; margin-top: 20px; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">✅</div>
+                <h1>Xác thực email thành công!</h1>
+                <p>Chào mừng <span class="username">{user.username}</span> đến với BookStore!</p>
+                <p>Email <strong>{user.email}</strong> đã được xác thực.</p>
+                <div class="info">
+                    <p>🎉 Bạn đã có thể đăng nhập và sử dụng đầy đủ tính năng của BookStore.</p>
+                    <p>📧 Chúng tôi đã gửi email chào mừng đến bạn.</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """)
+    except Exception as e:
+        db.rollback()
+        return HTMLResponse(content=f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Lỗi - BookStore</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }}
+                .container {{ background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }}
+                .icon {{ font-size: 60px; margin-bottom: 20px; }}
+                h1 {{ color: #f44336; margin-bottom: 20px; }}
+                p {{ color: #666; line-height: 1.6; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Lỗi xác thực</h1>
+                <p>Đã xảy ra lỗi khi xác thực email: {str(e)}</p>
+                <p>Vui lòng thử lại sau hoặc liên hệ hỗ trợ.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=500)
+
+@app.post("/api/auth/resend-verification")
+async def resend_verification(email: str, db: Session = Depends(get_db)):
+    """Gửi lại email xác thực"""
+    
+    # Tìm user
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Email không tồn tại trong hệ thống")
+    
+    if user.email_verified:
+        raise HTTPException(status_code=400, detail="Email đã được xác thực")
+    
+    # Xóa các token cũ chưa sử dụng
+    db.query(EmailVerificationToken).filter(
+        EmailVerificationToken.user_id == user.id,
+        EmailVerificationToken.is_used == False
+    ).delete()
+    
+    # Tạo token mới
+    verification_token = secrets.token_urlsafe(32)
+    token_expires = datetime.utcnow() + timedelta(hours=24)
+    
+    email_token = EmailVerificationToken(
+        user_id=user.id,
+        token=verification_token,
+        expires_at=token_expires
+    )
+    db.add(email_token)
+    db.commit()
+    
+    # Gửi email
+    verification_link = f"{BASE_URL}/api/auth/verify-email/{verification_token}"
+    try:
+        EmailService.send_verification_email(
+            to_email=user.email,
+            username=user.username,
+            verification_link=verification_link
+        )
+        return {"message": "Email xác thực đã được gửi lại"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi gửi email: {str(e)}")
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(email: str, db: Session = Depends(get_db)):
+    """Gửi email đặt lại mật khẩu"""
+    
+    # Tìm user
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        # Không tiết lộ email có tồn tại hay không vì lý do bảo mật
+        return {"message": "Nếu email tồn tại trong hệ thống, bạn sẽ nhận được email hướng dẫn đặt lại mật khẩu"}
+    
+    # Xóa các token reset cũ chưa sử dụng
+    db.query(PasswordResetToken).filter(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.is_used == False
+    ).delete()
+    
+    # Tạo token mới
+    reset_token = secrets.token_urlsafe(32)
+    token_expires = datetime.utcnow() + timedelta(hours=1)  # Token hết hạn sau 1 giờ
+    
+    password_token = PasswordResetToken(
+        user_id=user.id,
+        token=reset_token,
+        expires_at=token_expires
+    )
+    db.add(password_token)
+    db.commit()
+    
+    # Gửi email
+    reset_link = f"{BASE_URL}/api/auth/reset-password-page?token={reset_token}"
+    try:
+        EmailService.send_password_reset_email(
+            to_email=user.email,
+            username=user.username,
+            reset_link=reset_link
+        )
+        print(f"📧 Password reset email sent to {user.email}")
+    except Exception as e:
+        print(f"⚠️ Failed to send password reset email: {str(e)}")
+    
+    return {"message": "Nếu email tồn tại trong hệ thống, bạn sẽ nhận được email hướng dẫn đặt lại mật khẩu"}
+
+@app.get("/api/auth/reset-password-page", response_class=HTMLResponse)
+async def reset_password_page(token: str, db: Session = Depends(get_db)):
+    """Hiển thị form reset password - Trả về HTML cho browser"""
+    
+    # Tìm token
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == token,
+        PasswordResetToken.is_used == False
+    ).first()
+    
+    if not reset_token:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Token không hợp lệ - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #f44336; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Token không hợp lệ</h1>
+                <p>Token không hợp lệ hoặc đã được sử dụng. Vui lòng yêu cầu đặt lại mật khẩu lại.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+    
+    # Kiểm tra token đã hết hạn chưa
+    if datetime.utcnow() > reset_token.expires_at:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Token hết hạn - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #ff9800; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">⏰</div>
+                <h1>Token đã hết hạn</h1>
+                <p>Link đặt lại mật khẩu đã hết hạn sau 1 giờ. Vui lòng yêu cầu đặt lại mật khẩu lại.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=400)
+    
+    # Lấy user
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        return HTMLResponse(content="""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Lỗi - BookStore</title>
+            <style>
+                body { font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+                .container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); text-align: center; max-width: 500px; }
+                .icon { font-size: 60px; margin-bottom: 20px; }
+                h1 { color: #f44336; margin-bottom: 20px; }
+                p { color: #666; line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">❌</div>
+                <h1>Lỗi</h1>
+                <p>Người dùng không tồn tại.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=404)
+    
+    # Hiển thị form đặt lại mật khẩu
+    return HTMLResponse(content=f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Đặt lại mật khẩu - BookStore</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }}
+            .container {{ background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 40px rgba(0,0,0,0.1); max-width: 500px; width: 100%; }}
+            .icon {{ font-size: 60px; margin-bottom: 20px; text-align: center; }}
+            h1 {{ color: #333; margin-bottom: 10px; text-align: center; }}
+            p {{ color: #666; text-align: center; margin-bottom: 30px; }}
+            .form-group {{ margin-bottom: 20px; }}
+            label {{ display: block; margin-bottom: 5px; color: #333; font-weight: bold; }}
+            input {{ width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 5px; font-size: 16px; box-sizing: border-box; }}
+            button {{ width: 100%; padding: 12px; background: #2196F3; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; font-weight: bold; }}
+            button:hover {{ background: #1976D2; }}
+            .error {{ color: #f44336; margin-top: 10px; text-align: center; }}
+            .success {{ color: #4CAF50; margin-top: 10px; text-align: center; }}
+            .info {{ background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 20px; border: 1px solid #ffc107; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">🔐</div>
+            <h1>Đặt lại mật khẩu</h1>
+            <p>Xin chào <strong>{user.username}</strong>, vui lòng nhập mật khẩu mới</p>
+            <div class="info">
+                <small>⚠️ Mật khẩu phải có ít nhất 6 ký tự</small>
+            </div>
+            <form id="resetForm">
+                <div class="form-group">
+                    <label for="password">Mật khẩu mới:</label>
+                    <input type="password" id="password" name="password" required minlength="6">
+                </div>
+                <div class="form-group">
+                    <label for="confirmPassword">Xác nhận mật khẩu:</label>
+                    <input type="password" id="confirmPassword" name="confirmPassword" required minlength="6">
+                </div>
+                <button type="submit">Đặt lại mật khẩu</button>
+                <div id="message"></div>
+            </form>
+        </div>
+        <script>
+            document.getElementById('resetForm').addEventListener('submit', async function(e) {{
+                e.preventDefault();
+                const password = document.getElementById('password').value;
+                const confirmPassword = document.getElementById('confirmPassword').value;
+                const messageDiv = document.getElementById('message');
+                
+                if (password !== confirmPassword) {{
+                    messageDiv.innerHTML = '<p class="error">Mật khẩu xác nhận không khớp!</p>';
+                    return;
+                }}
+                
+                if (password.length < 6) {{
+                    messageDiv.innerHTML = '<p class="error">Mật khẩu phải có ít nhất 6 ký tự!</p>';
+                    return;
+                }}
+                
+                try {{
+                    const response = await fetch('{BASE_URL}/api/auth/reset-password', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{
+                            token: '{token}',
+                            new_password: password
+                        }})
+                    }});
+                    
+                    const data = await response.json();
+                    
+                    if (response.ok) {{
+                        messageDiv.innerHTML = '<p class="success">✅ ' + data.message + '</p>';
+                        document.getElementById('resetForm').innerHTML = '<p class="success">Đặt lại mật khẩu thành công! Bạn có thể đăng nhập ngay bây giờ.</p>';
+                    }} else {{
+                        messageDiv.innerHTML = '<p class="error">❌ ' + data.detail + '</p>';
+                    }}
+                }} catch (error) {{
+                    messageDiv.innerHTML = '<p class="error">❌ Lỗi kết nối server</p>';
+                }}
+            }});
+        </script>
+    </body>
+    </html>
+    """)
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+@app.post("/api/auth/reset-password")
+async def reset_password(request: ResetPasswordRequest, db: Session = Depends(get_db)):
+    """Đặt lại mật khẩu bằng token"""
+    
+    # Tìm token
+    reset_token = db.query(PasswordResetToken).filter(
+        PasswordResetToken.token == request.token,
+        PasswordResetToken.is_used == False
+    ).first()
+    
+    if not reset_token:
+        raise HTTPException(status_code=400, detail="Token không hợp lệ hoặc đã được sử dụng")
+    
+    # Kiểm tra token đã hết hạn chưa
+    if datetime.utcnow() > reset_token.expires_at:
+        raise HTTPException(status_code=400, detail="Token đã hết hạn")
+    
+    # Lấy user
+    user = db.query(User).filter(User.id == reset_token.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Người dùng không tồn tại")
+    
+    # Validate mật khẩu mới
+    if len(request.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Mật khẩu phải có ít nhất 6 ký tự")
+    
+    # Cập nhật mật khẩu
+    user.password_hash = get_password_hash(request.new_password)
+    reset_token.is_used = True
+    
+    try:
+        db.commit()
+        return {
+            "message": "Mật khẩu đã được đặt lại thành công",
+            "username": user.username
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi đặt lại mật khẩu: {str(e)}")
 
 # =====================================================
 # USER ENDPOINTS
@@ -613,6 +1111,93 @@ async def create_user_address(user_id: int, address_data: dict, db: Session = De
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo địa chỉ: {str(e)}")
+
+@app.put("/api/users/{user_id}/addresses/{address_id}")
+async def update_user_address(user_id: int, address_id: int, address_data: dict, db: Session = Depends(get_db)):
+    """Cập nhật địa chỉ của người dùng"""
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get the address
+    address = db.query(UserAddress).filter(
+        UserAddress.id == address_id,
+        UserAddress.user_id == user_id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # If this is set as default, unset other default addresses
+    if address_data.get("is_default", False):
+        db.query(UserAddress).filter(
+            UserAddress.user_id == user_id,
+            UserAddress.id != address_id
+        ).update({"is_default": False})
+    
+    # Update address fields
+    address.recipient_name = address_data.get("recipient_name", address.recipient_name)
+    address.phone = address_data.get("phone", address.phone)
+    address.address_line1 = address_data.get("address_line1", address.address_line1)
+    address.address_line2 = address_data.get("address_line2", address.address_line2)
+    address.ward = address_data.get("ward", address.ward)
+    address.district = address_data.get("district", address.district)
+    address.city = address_data.get("city", address.city)
+    address.country = address_data.get("country", address.country)
+    address.is_default = address_data.get("is_default", address.is_default)
+    address.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        db.refresh(address)
+        
+        return {
+            "id": address.id,
+            "message": "Địa chỉ đã được cập nhật thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật địa chỉ: {str(e)}")
+
+@app.delete("/api/users/{user_id}/addresses/{address_id}")
+async def delete_user_address(user_id: int, address_id: int, db: Session = Depends(get_db)):
+    """Xóa địa chỉ của người dùng"""
+    # Check if user exists
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get the address
+    address = db.query(UserAddress).filter(
+        UserAddress.id == address_id,
+        UserAddress.user_id == user_id
+    ).first()
+    
+    if not address:
+        raise HTTPException(status_code=404, detail="Address not found")
+    
+    # Check if there are any orders using this address
+    orders_using_address = db.query(Order).filter(
+        Order.shipping_address_id == address_id
+    ).count()
+    
+    if orders_using_address > 0:
+        raise HTTPException(
+            status_code=400, 
+            detail="Không thể xóa địa chỉ này vì đang được sử dụng trong đơn hàng"
+        )
+    
+    try:
+        db.delete(address)
+        db.commit()
+        
+        return {
+            "message": "Địa chỉ đã được xóa thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi xóa địa chỉ: {str(e)}")
 
 # =====================================================
 # BOOK ENDPOINTS
@@ -1174,7 +1759,8 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
         # If discount_percentage is provided, calculate price from original_price
         book.discount_percentage = book_data.discount_percentage
         if book.original_price and book.original_price > 0:
-            book.price = book.original_price * (1 - book.discount_percentage / 100)
+            # Convert to float to avoid Decimal * float TypeError
+            book.price = float(book.original_price) * (1 - float(book.discount_percentage) / 100)
             print(f"💰 Calculated price from discount: {book.original_price} * (1 - {book.discount_percentage}/100) = {book.price}")
         else:
             print(f"⚠️ Cannot calculate price: original_price is {book.original_price}")
@@ -1187,7 +1773,8 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
         # Recalculate discount percentage if we have original_price
         if book.original_price and book.original_price > 0:
             if book.price < book.original_price:
-                book.discount_percentage = ((book.original_price - book.price) / book.original_price) * 100
+                # Convert to float to avoid Decimal arithmetic issues
+                book.discount_percentage = ((float(book.original_price) - float(book.price)) / float(book.original_price)) * 100
                 print(f"📊 Calculated discount: {book.discount_percentage}%")
             else:
                 book.discount_percentage = 0
@@ -1246,27 +1833,180 @@ async def get_book_reviews(book_id: int, skip: int = 0, limit: int = 20, db: Ses
     reviews = db.query(BookReview).filter(
         BookReview.book_id == book_id,
         BookReview.is_approved == True
-    ).offset(skip).limit(limit).all()
+    ).order_by(BookReview.created_at.desc()).offset(skip).limit(limit).all()
     
-    return {
-        "reviews": [
-            {
-                "id": review.id,
-                "user_name": f"{review.user.first_name} {review.user.last_name}",
-                "rating": review.rating,
-                "title": review.title,
-                "comment": review.comment,
-                "created_at": review.created_at
+    # Return list directly for frontend compatibility
+    return [
+        {
+            "id": review.id,
+            "user_name": f"{review.user.first_name} {review.user.last_name}",
+            "rating": review.rating,
+            "title": review.title,
+            "comment": review.comment,
+            "created_at": review.created_at.isoformat() if review.created_at else None
+        }
+        for review in reviews
+    ]
+
+@app.get("/api/reviews/check")
+async def check_single_order_review(order_id: int, user_id: int, db: Session = Depends(get_db)):
+    """Check if user has reviewed all products in a specific order"""
+    try:
+        # Get all items in the order
+        order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
+        
+        if not order_items:
+            return {"has_reviewed": False}
+        
+        # Check if ALL products in the order have been reviewed
+        for item in order_items:
+            review = db.query(BookReview).filter(
+                BookReview.book_id == item.book_id,
+                BookReview.user_id == user_id,
+                BookReview.order_id == order_id
+            ).first()
+            
+            if not review:
+                # If any product is not reviewed, return False
+                return {"has_reviewed": False}
+        
+        # All products have been reviewed
+        return {"has_reviewed": True}
+    except Exception as e:
+        print(f"❌ Check review error: {str(e)}")
+        return {"has_reviewed": False}
+
+@app.post("/api/reviews/check-batch")
+async def check_batch_order_reviews(request_data: dict, db: Session = Depends(get_db)):
+    """Check review status for multiple orders at once (batch operation)"""
+    try:
+        order_ids = request_data.get('order_ids', [])
+        user_id = request_data.get('user_id')
+        
+        if not order_ids or not user_id:
+            return {}
+        
+        print(f"⭐ Checking reviews for {len(order_ids)} orders by user #{user_id}")
+        
+        results = {}
+        
+        for order_id in order_ids:
+            # Get all items in this order
+            order_items = db.query(OrderItem).filter(OrderItem.order_id == order_id).all()
+            
+            if not order_items:
+                results[str(order_id)] = False
+                continue
+            
+            # Check if ALL products in the order have been reviewed
+            all_reviewed = True
+            for item in order_items:
+                review = db.query(BookReview).filter(
+                    BookReview.book_id == item.book_id,
+                    BookReview.user_id == user_id,
+                    BookReview.order_id == order_id
+                ).first()
+                
+                if not review:
+                    all_reviewed = False
+                    break
+            
+            results[str(order_id)] = all_reviewed
+        
+        print(f" Batch check completed: {results}")
+        return results
+        
+    except Exception as e:
+        print(f" Batch check review error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {}
+
+@app.post("/api/reviews")
+async def submit_review(review_data: dict, db: Session = Depends(get_db)):
+    """Submit review for a book in an order"""
+    try:
+        book_id = review_data.get('book_id')
+        order_id = review_data.get('order_id')
+        rating = review_data.get('rating')
+        comment = review_data.get('comment')
+        
+        if not book_id or not order_id or not rating:
+            raise HTTPException(status_code=400, detail="Missing required fields")
+        
+        # Get user_id from order
+        order = db.query(Order).filter(Order.id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        user_id = order.user_id
+        
+        # Check if book exists
+        book = db.query(Book).filter(Book.id == book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        # Check if user already reviewed this book in this order
+        existing_review = db.query(BookReview).filter(
+            BookReview.book_id == book_id,
+            BookReview.user_id == user_id,
+            BookReview.order_id == order_id
+        ).first()
+        
+        if existing_review:
+            return {
+                "success": False,
+                "message": "Bạn đã đánh giá sản phẩm này trong đơn hàng này rồi"
             }
-            for review in reviews
-        ],
-        "total": len(reviews),
-        "average_rating": float(book.rating_average),
-        "rating_count": book.rating_count
-    }
+        
+        # Create review
+        new_review = BookReview(
+            book_id=book_id,
+            user_id=user_id,
+            order_id=order_id,
+            rating=rating,
+            comment=comment,
+            is_approved=True
+        )
+        
+        db.add(new_review)
+        db.flush()
+        
+        # Update book rating
+        rating_stats = db.query(
+            func.avg(BookReview.rating).label('avg_rating'),
+            func.count(BookReview.id).label('count')
+        ).filter(BookReview.book_id == book_id).first()
+        
+        if rating_stats and rating_stats.count > 0:
+            book.rating_average = float(rating_stats.avg_rating)
+            book.rating_count = rating_stats.count
+            print(f"📊 Updated book #{book_id} rating: {book.rating_average:.2f} ({book.rating_count} reviews)")
+        
+        db.commit()
+        
+        return {
+            "success": True,
+            "message": "Đánh giá đã được thêm thành công"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Error submitting review: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi gửi đánh giá: {str(e)}")
 
 @app.post("/api/books/{book_id}/reviews")
-async def create_book_review(book_id: int, review_data: BookReviewCreate, user_id: int, db: Session = Depends(get_db)):
+async def create_book_review(
+    book_id: int, 
+    review_data: BookReviewCreate, 
+    user_id: int, 
+    order_id: int = None,  # Added order_id parameter
+    db: Session = Depends(get_db)
+):
     """Tạo đánh giá cho sách"""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -1276,18 +2016,28 @@ async def create_book_review(book_id: int, review_data: BookReviewCreate, user_i
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    # Check if user already reviewed this book
-    existing_review = db.query(BookReview).filter(
+    # Check if user already reviewed this book in this order
+    query = db.query(BookReview).filter(
         BookReview.book_id == book_id,
         BookReview.user_id == user_id
-    ).first()
+    )
+    
+    if order_id:
+        # If order_id provided, check for this specific order
+        query = query.filter(BookReview.order_id == order_id)
+    else:
+        # If no order_id, check for reviews without order_id
+        query = query.filter(BookReview.order_id == None)
+    
+    existing_review = query.first()
     
     if existing_review:
-        raise HTTPException(status_code=400, detail="Bạn đã đánh giá sách này rồi")
+        raise HTTPException(status_code=400, detail="Bạn đã đánh giá sản phẩm này trong đơn hàng này rồi")
     
     new_review = BookReview(
         book_id=book_id,
         user_id=user_id,
+        order_id=order_id,  # Added order_id
         rating=review_data.rating,
         title=review_data.title,
         comment=review_data.comment,
@@ -1296,13 +2046,18 @@ async def create_book_review(book_id: int, review_data: BookReviewCreate, user_i
     
     try:
         db.add(new_review)
+        db.flush()  # Flush to get the new review ID without committing
         
-        # Update book rating
-        all_reviews = db.query(BookReview).filter(BookReview.book_id == book_id).all()
-        if all_reviews:
-            total_rating = sum(r.rating for r in all_reviews)
-            book.rating_average = total_rating / len(all_reviews)
-            book.rating_count = len(all_reviews)
+        # Update book rating using SQL aggregate (much faster)
+        rating_stats = db.query(
+            func.avg(BookReview.rating).label('avg_rating'),
+            func.count(BookReview.id).label('count')
+        ).filter(BookReview.book_id == book_id).first()
+        
+        if rating_stats and rating_stats.count > 0:
+            book.rating_average = float(rating_stats.avg_rating)
+            book.rating_count = rating_stats.count
+            print(f"📊 Updated book #{book_id} rating: {book.rating_average:.2f} ({book.rating_count} reviews)")
         
         db.commit()
         db.refresh(new_review)
@@ -1313,6 +2068,7 @@ async def create_book_review(book_id: int, review_data: BookReviewCreate, user_i
         }
     except Exception as e:
         db.rollback()
+        print(f"❌ Error creating review: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo đánh giá: {str(e)}")
 
 # =====================================================
@@ -1500,8 +2256,380 @@ async def clear_cart(user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error clearing cart: {str(e)}")
 
 # =====================================================
-# WISHLIST ENDPOINTS
+# VOUCHER ENDPOINTS
 # =====================================================
+
+class CartItemInput(BaseModel):
+    book_id: int
+    quantity: int
+
+class VoucherValidateRequest(BaseModel):
+    user_id: int
+    code: str
+    items: Optional[List[CartItemInput]] = None
+    subtotal: Optional[float] = None
+    shipping_fee: Optional[float] = 0
+
+
+def _compute_voucher_for_cart(voucher: Voucher, user_id: int, cart_items: List[CartItem], subtotal: float, shipping_fee: float, db: Session):
+    now = datetime.utcnow()
+    if not voucher.is_active:
+        return False, "Voucher không hoạt động", 0.0, 0.0
+    if now < voucher.start_date or now > voucher.end_date:
+        return False, "Voucher không nằm trong thời gian áp dụng", 0.0, 0.0
+
+    # Global usage limit
+    if voucher.usage_limit is not None and voucher.used_count is not None and voucher.used_count >= voucher.usage_limit:
+        return False, "Voucher đã hết lượt sử dụng", 0.0, 0.0
+
+    # Per-user usage limit
+    if voucher.user_limit is not None and voucher.user_limit > 0:
+        user_used = db.query(func.count(VoucherUsage.id)).filter(
+            VoucherUsage.voucher_id == voucher.id,
+            VoucherUsage.user_id == user_id
+        ).scalar() or 0
+        if user_used >= voucher.user_limit:
+            return False, "Bạn đã dùng hết số lần cho voucher này", 0.0, 0.0
+
+    # Min order amount
+    if voucher.min_order_amount and float(subtotal) < float(voucher.min_order_amount):
+        return False, "Chưa đạt giá trị đơn tối thiểu", 0.0, 0.0
+
+    # Determine eligible amount (respect include/exclude rules)
+    include_cat = set(voucher.applicable_categories or [])
+    include_books = set(voucher.applicable_books or [])
+    exclude_cat = set(voucher.excluded_categories or [])
+    exclude_books = set(voucher.excluded_books or [])
+
+    eligible_amount = 0.0
+    for ci in cart_items:
+        book = ci.book
+        # Exclusions first
+        if book.id in exclude_books or (book.category_id in exclude_cat if book.category_id else False):
+            continue
+        # Inclusions (if any defined)
+        if include_books or include_cat:
+            allowed = (book.id in include_books) or (book.category_id in include_cat if book.category_id else False)
+            if not allowed:
+                continue
+        eligible_amount += float(book.price) * ci.quantity
+
+    # If inclusion filters set but nothing eligible, treat as not applicable
+    if (include_books or include_cat) and eligible_amount <= 0:
+        return False, "Không có sản phẩm phù hợp điều kiện voucher", 0.0, 0.0
+
+    discount_amount = 0.0
+    shipping_discount = 0.0
+
+    if voucher.discount_type == 'percentage':
+        discount_amount = eligible_amount * float(voucher.discount_value) / 100.0
+        if voucher.max_discount_amount:
+            discount_amount = min(discount_amount, float(voucher.max_discount_amount))
+    elif voucher.discount_type == 'fixed_amount':
+        discount_amount = min(float(voucher.discount_value), eligible_amount)
+        if voucher.max_discount_amount:
+            discount_amount = min(discount_amount, float(voucher.max_discount_amount))
+    elif voucher.discount_type == 'free_shipping':
+        # Discount on shipping fee up to max_discount_amount (if any)
+        shipping_discount = float(shipping_fee or 0)
+        if voucher.max_discount_amount:
+            shipping_discount = min(shipping_discount, float(voucher.max_discount_amount))
+    else:
+        return False, "Loại voucher không hợp lệ", 0.0, 0.0
+
+    return True, "OK", round(discount_amount, 2), round(shipping_discount, 2)
+
+
+@app.get("/api/vouchers")
+async def list_vouchers(user_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Danh sách voucher đang hoạt động (trong thời gian hiệu lực)"""
+    now = datetime.utcnow()
+    vouchers = db.query(Voucher).filter(
+        Voucher.is_active == True,
+        Voucher.start_date <= now,
+        Voucher.end_date >= now
+    ).order_by(Voucher.created_at.desc()).all()
+
+    result = []
+    for v in vouchers:
+        remaining_uses = None
+        if v.usage_limit is not None and v.used_count is not None:
+            remaining_uses = max(int(v.usage_limit - v.used_count), 0)
+        # Map to simple structure compatible with mobile app
+        result.append({
+            "id": v.id,
+            "code": v.code,
+            "name": v.name,
+            "description": v.description,
+            "discount": int(float(v.discount_value)) if v.discount_type == 'percentage' else 0,
+            "discount_type": v.discount_type,
+            "discount_value": float(v.discount_value),
+            "minPrice": int(float(v.min_order_amount or 0)),
+            "maxDiscount": int(float(v.max_discount_amount or 0)) if v.max_discount_amount else 0,
+            "startDate": v.start_date.isoformat() if v.start_date else None,
+            "endDate": v.end_date.isoformat() if v.end_date else None,
+            "expiryDate": v.end_date.isoformat() if v.end_date else None,
+            "maxUses": int(v.usage_limit) if v.usage_limit is not None else None,
+            "remainingUses": remaining_uses if remaining_uses is not None else None,
+            "isActive": v.is_active,
+        })
+    return {"vouchers": result, "total": len(result)}
+
+
+@app.post("/api/vouchers/validate")
+async def validate_voucher(req: VoucherValidateRequest, db: Session = Depends(get_db)):
+    """Kiểm tra và tính toán mức giảm cho mã voucher với giỏ hàng hiện tại"""
+    code = req.code.strip().upper()
+    voucher = db.query(Voucher).filter(Voucher.code == code).first()
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher không tồn tại")
+
+    # Get cart items: from request or from DB
+    cart_items: List[CartItem] = []
+    if req.items and len(req.items) > 0:
+        # Build transient CartItem-like objects by querying books
+        # For accurate pricing, fetch from DB using book ids
+        items_map = {item.book_id: item.quantity for item in req.items}
+        books = db.query(Book).filter(Book.id.in_(list(items_map.keys()))).all()
+        for b in books:
+            ci = CartItem(user_id=req.user_id, book_id=b.id, quantity=items_map.get(b.id, 1))
+            ci.book = b
+            cart_items.append(ci)
+        subtotal = sum(float(ci.book.price) * ci.quantity for ci in cart_items)
+    else:
+        cart_items = db.query(CartItem).options(joinedload(CartItem.book)).filter(CartItem.user_id == req.user_id).all()
+        subtotal = sum(float(ci.book.price) * ci.quantity for ci in cart_items)
+
+    shipping_fee = float(req.shipping_fee or 0)
+
+    ok, reason, discount_amount, shipping_discount = _compute_voucher_for_cart(
+        voucher, req.user_id, cart_items, subtotal, shipping_fee, db
+    )
+
+    total = subtotal + shipping_fee - discount_amount - shipping_discount
+    total = round(total, 2)
+
+    return {
+        "valid": ok,
+        "reason": None if ok else reason,
+        "voucher": {
+            "id": voucher.id,
+            "code": voucher.code,
+            "name": voucher.name,
+            "discount_type": voucher.discount_type,
+            "discount_value": float(voucher.discount_value),
+            "min_order_amount": float(voucher.min_order_amount or 0),
+            "max_discount_amount": float(voucher.max_discount_amount or 0) if voucher.max_discount_amount else 0,
+            "end_date": voucher.end_date.isoformat() if voucher.end_date else None,
+        },
+        "subtotal": round(subtotal, 2),
+        "shipping_fee": round(shipping_fee, 2),
+        "discount_amount": discount_amount,
+        "shipping_discount": shipping_discount,
+        "total": total
+    }
+
+
+# =====================================================
+# ADMIN VOUCHER MANAGEMENT ENDPOINTS
+# =====================================================
+
+class VoucherCreateRequest(BaseModel):
+    code: str
+    name: str
+    description: Optional[str] = None
+    discount_type: str  # 'percentage', 'fixed_amount', 'free_shipping'
+    discount_value: float
+    min_order_amount: Optional[float] = 0
+    max_discount_amount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    user_limit: int = 1
+    start_date: str  # ISO format
+    end_date: str    # ISO format
+    is_active: bool = True
+    applicable_categories: Optional[List[int]] = None
+    applicable_books: Optional[List[int]] = None
+    excluded_categories: Optional[List[int]] = None
+    excluded_books: Optional[List[int]] = None
+
+class VoucherUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    discount_type: Optional[str] = None
+    discount_value: Optional[float] = None
+    min_order_amount: Optional[float] = None
+    max_discount_amount: Optional[float] = None
+    usage_limit: Optional[int] = None
+    user_limit: Optional[int] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    is_active: Optional[bool] = None
+    applicable_categories: Optional[List[int]] = None
+    applicable_books: Optional[List[int]] = None
+    excluded_categories: Optional[List[int]] = None
+    excluded_books: Optional[List[int]] = None
+
+@app.post("/api/admin/vouchers")
+async def create_voucher(voucher_data: VoucherCreateRequest, db: Session = Depends(get_db)):
+    """Tạo voucher mới (Admin only)"""
+    try:
+        # Check if code exists
+        existing = db.query(Voucher).filter(Voucher.code == voucher_data.code.upper()).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Mã voucher đã tồn tại")
+        
+        # Parse dates
+        start_date = datetime.fromisoformat(voucher_data.start_date.replace('Z', '+00:00'))
+        end_date = datetime.fromisoformat(voucher_data.end_date.replace('Z', '+00:00'))
+        
+        new_voucher = Voucher(
+            code=voucher_data.code.upper(),
+            name=voucher_data.name,
+            description=voucher_data.description,
+            discount_type=voucher_data.discount_type,
+            discount_value=voucher_data.discount_value,
+            min_order_amount=voucher_data.min_order_amount,
+            max_discount_amount=voucher_data.max_discount_amount,
+            usage_limit=voucher_data.usage_limit,
+            used_count=0,
+            user_limit=voucher_data.user_limit,
+            start_date=start_date,
+            end_date=end_date,
+            is_active=voucher_data.is_active,
+            applicable_categories=voucher_data.applicable_categories,
+            applicable_books=voucher_data.applicable_books,
+            excluded_categories=voucher_data.excluded_categories,
+            excluded_books=voucher_data.excluded_books,
+        )
+        
+        db.add(new_voucher)
+        db.commit()
+        db.refresh(new_voucher)
+        
+        return {
+            "id": new_voucher.id,
+            "code": new_voucher.code,
+            "message": "Voucher đã được tạo thành công"
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Ngày tháng không hợp lệ: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tạo voucher: {str(e)}")
+
+@app.put("/api/admin/vouchers/{voucher_id}")
+async def update_voucher(voucher_id: int, voucher_data: VoucherUpdateRequest, db: Session = Depends(get_db)):
+    """Cập nhật voucher (Admin only)"""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher không tồn tại")
+    
+    try:
+        # Update fields
+        if voucher_data.name is not None:
+            voucher.name = voucher_data.name
+        if voucher_data.description is not None:
+            voucher.description = voucher_data.description
+        if voucher_data.discount_type is not None:
+            voucher.discount_type = voucher_data.discount_type
+        if voucher_data.discount_value is not None:
+            voucher.discount_value = voucher_data.discount_value
+        if voucher_data.min_order_amount is not None:
+            voucher.min_order_amount = voucher_data.min_order_amount
+        if voucher_data.max_discount_amount is not None:
+            voucher.max_discount_amount = voucher_data.max_discount_amount
+        if voucher_data.usage_limit is not None:
+            voucher.usage_limit = voucher_data.usage_limit
+        if voucher_data.user_limit is not None:
+            voucher.user_limit = voucher_data.user_limit
+        if voucher_data.start_date is not None:
+            voucher.start_date = datetime.fromisoformat(voucher_data.start_date.replace('Z', '+00:00'))
+        if voucher_data.end_date is not None:
+            voucher.end_date = datetime.fromisoformat(voucher_data.end_date.replace('Z', '+00:00'))
+        if voucher_data.is_active is not None:
+            voucher.is_active = voucher_data.is_active
+        if voucher_data.applicable_categories is not None:
+            voucher.applicable_categories = voucher_data.applicable_categories
+        if voucher_data.applicable_books is not None:
+            voucher.applicable_books = voucher_data.applicable_books
+        if voucher_data.excluded_categories is not None:
+            voucher.excluded_categories = voucher_data.excluded_categories
+        if voucher_data.excluded_books is not None:
+            voucher.excluded_books = voucher_data.excluded_books
+        
+        db.commit()
+        db.refresh(voucher)
+        
+        return {
+            "id": voucher.id,
+            "code": voucher.code,
+            "message": "Voucher đã được cập nhật"
+        }
+    except ValueError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Ngày tháng không hợp lệ: {str(e)}")
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật voucher: {str(e)}")
+
+@app.delete("/api/admin/vouchers/{voucher_id}")
+async def delete_voucher(voucher_id: int, db: Session = Depends(get_db)):
+    """Xóa voucher (Admin only)"""
+    voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+    if not voucher:
+        raise HTTPException(status_code=404, detail="Voucher không tồn tại")
+    
+    # Check if voucher has been used
+    usage_count = db.query(VoucherUsage).filter(VoucherUsage.voucher_id == voucher_id).count()
+    if usage_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Không thể xóa voucher đã được sử dụng {usage_count} lần. Hãy vô hiệu hóa thay vì xóa."
+        )
+    
+    try:
+        db.delete(voucher)
+        db.commit()
+        return {"message": "Voucher đã được xóa thành công"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi xóa voucher: {str(e)}")
+
+@app.get("/api/admin/vouchers")
+async def list_all_vouchers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """Lấy toàn bộ voucher (Admin only)"""
+    vouchers = db.query(Voucher).order_by(Voucher.created_at.desc()).offset(skip).limit(limit).all()
+    
+    result = []
+    for v in vouchers:
+        remaining_uses = None
+        if v.usage_limit is not None and v.used_count is not None:
+            remaining_uses = max(int(v.usage_limit - v.used_count), 0)
+        
+        result.append({
+            "id": v.id,
+            "code": v.code,
+            "name": v.name,
+            "description": v.description,
+            "discount_type": v.discount_type,
+            "discount_value": float(v.discount_value),
+            "min_order_amount": float(v.min_order_amount or 0),
+            "max_discount_amount": float(v.max_discount_amount or 0) if v.max_discount_amount else None,
+            "usage_limit": int(v.usage_limit) if v.usage_limit is not None else None,
+            "used_count": int(v.used_count or 0),
+            "remaining_uses": remaining_uses,
+            "user_limit": int(v.user_limit),
+            "start_date": v.start_date.isoformat() if v.start_date else None,
+            "end_date": v.end_date.isoformat() if v.end_date else None,
+            "is_active": v.is_active,
+            "applicable_categories": v.applicable_categories or [],
+            "applicable_books": v.applicable_books or [],
+            "excluded_categories": v.excluded_categories or [],
+            "excluded_books": v.excluded_books or [],
+            "created_at": v.created_at.isoformat() if v.created_at else None,
+        })
+    
+    return {"vouchers": result, "total": len(result)}
 
 @app.get("/api/wishlist/{user_id}")
 async def get_wishlist(user_id: int, db: Session = Depends(get_db)):
@@ -1609,16 +2737,29 @@ async def get_user_orders(user_id: int, db: Session = Depends(get_db)):
 async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
     """Tạo đơn hàng mới"""
     # Get user's cart items
-    cart_items = db.query(CartItem).filter(CartItem.user_id == order_data.user_id).all()
+    cart_items = db.query(CartItem).options(joinedload(CartItem.book)).filter(CartItem.user_id == order_data.user_id).all()
     if not cart_items:
         raise HTTPException(status_code=400, detail="Cart is empty")
     
     # Calculate totals
-    subtotal = sum(float(item.book.price * item.quantity) for item in cart_items)
-    shipping_fee = 0  # TODO: Calculate based on address
-    discount_amount = 0  # TODO: Apply voucher discount
+    subtotal = sum(float(item.book.price) * item.quantity for item in cart_items)
+    shipping_fee = 0.0  # TODO: Calculate based on address
+    discount_amount = 0.0
+    shipping_discount = 0.0
+
+    # Apply voucher if provided
+    applied_voucher = None
+    if order_data.voucher_id is not None:
+        applied_voucher = db.query(Voucher).filter(Voucher.id == order_data.voucher_id).first()
+        if not applied_voucher:
+            raise HTTPException(status_code=400, detail="Voucher không tồn tại")
+        ok, reason, disc, ship_disc = _compute_voucher_for_cart(applied_voucher, order_data.user_id, cart_items, subtotal, shipping_fee, db)
+        if not ok:
+            raise HTTPException(status_code=400, detail=f"Không áp dụng được voucher: {reason}")
+        discount_amount = disc
+        shipping_discount = ship_disc
     
-    total_amount = subtotal + shipping_fee - discount_amount
+    total_amount = subtotal + shipping_fee - discount_amount - shipping_discount
     
     # Generate order number
     order_number = generate_order_number()
@@ -1630,7 +2771,7 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         status="pending",
         subtotal=subtotal,
         shipping_fee=shipping_fee,
-        discount_amount=discount_amount,
+        discount_amount=discount_amount + shipping_discount,
         total_amount=total_amount,
         payment_method_id=order_data.payment_method_id,
         payment_status="pending",
@@ -1656,11 +2797,23 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
             
             # Update book stock
             cart_item.book.stock_quantity -= cart_item.quantity
-            cart_item.book.sold_quantity += cart_item.quantity
+            cart_item.book.sold_quantity = (cart_item.book.sold_quantity or 0) + cart_item.quantity
         
         # Clear cart
         for cart_item in cart_items:
             db.delete(cart_item)
+
+        # Record voucher usage
+        if applied_voucher is not None:
+            vu = VoucherUsage(
+                voucher_id=applied_voucher.id,
+                user_id=order_data.user_id,
+                order_id=new_order.id,
+                discount_amount=discount_amount + shipping_discount,
+            )
+            db.add(vu)
+            # Increase used count
+            applied_voucher.used_count = (applied_voucher.used_count or 0) + 1
         
         db.commit()
         db.refresh(new_order)
@@ -1677,19 +2830,33 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
 
 @app.post("/api/orders/simple")
-async def create_simple_order(user_id: int, payment_method: str = "COD", notes: str = None, db: Session = Depends(get_db)):
+async def create_simple_order(user_id: int, payment_method: str = "COD", notes: str = None, voucher_code: str = None, db: Session = Depends(get_db)):
     """Tạo đơn hàng đơn giản từ giỏ hàng (không cần address_id, payment_method_id)"""
     try:
         # Get user's cart items
-        cart_items = db.query(CartItem).filter(CartItem.user_id == user_id).all()
+        cart_items = db.query(CartItem).options(joinedload(CartItem.book)).filter(CartItem.user_id == user_id).all()
         if not cart_items:
             raise HTTPException(status_code=400, detail="Cart is empty")
         
         # Calculate totals
-        subtotal = sum(float(item.book.price * item.quantity) for item in cart_items)
-        shipping_fee = 0
-        discount_amount = 0
-        total_amount = subtotal + shipping_fee - discount_amount
+        subtotal = sum(float(item.book.price) * item.quantity for item in cart_items)
+        shipping_fee = 0.0
+        discount_amount = 0.0
+        shipping_discount = 0.0
+
+        applied_voucher = None
+        if voucher_code:
+            code = voucher_code.strip().upper()
+            applied_voucher = db.query(Voucher).filter(Voucher.code == code).first()
+            if not applied_voucher:
+                raise HTTPException(status_code=400, detail="Voucher không tồn tại")
+            ok, reason, disc, ship_disc = _compute_voucher_for_cart(applied_voucher, user_id, cart_items, subtotal, shipping_fee, db)
+            if not ok:
+                raise HTTPException(status_code=400, detail=f"Không áp dụng được voucher: {reason}")
+            discount_amount = disc
+            shipping_discount = ship_disc
+        
+        total_amount = subtotal + shipping_fee - discount_amount - shipping_discount
         
         # Generate order number
         order_number = generate_order_number()
@@ -1701,11 +2868,11 @@ async def create_simple_order(user_id: int, payment_method: str = "COD", notes: 
             status="pending",
             subtotal=subtotal,
             shipping_fee=shipping_fee,
-            discount_amount=discount_amount,
+            discount_amount=discount_amount + shipping_discount,
             total_amount=total_amount,
             payment_method_id=None,  # Optional
             payment_status="pending",
-            voucher_id=None,
+            voucher_id=applied_voucher.id if applied_voucher else None,
             shipping_address_id=None,  # Optional
             notes=notes or f"Payment: {payment_method}"
         )
@@ -1732,6 +2899,17 @@ async def create_simple_order(user_id: int, payment_method: str = "COD", notes: 
         # Clear cart
         for cart_item in cart_items:
             db.delete(cart_item)
+
+        # Record voucher usage
+        if applied_voucher is not None:
+            vu = VoucherUsage(
+                voucher_id=applied_voucher.id,
+                user_id=user_id,
+                order_id=new_order.id,
+                discount_amount=discount_amount + shipping_discount,
+            )
+            db.add(vu)
+            applied_voucher.used_count = (applied_voucher.used_count or 0) + 1
         
         db.commit()
         db.refresh(new_order)
@@ -1839,6 +3017,11 @@ async def update_order(order_id: int, order_data: OrderUpdate, db: Session = Dep
                 order.shipped_at = datetime.utcnow()
             elif order_data.status == "delivered":
                 order.delivered_at = datetime.utcnow()
+                # Automatically mark as paid when delivered
+                if order.payment_status != "paid":
+                    old_payment_status = order.payment_status
+                    order.payment_status = "paid"
+                    print(f"💳 Auto-updating payment status: {old_payment_status} → paid (order delivered)")
             elif order_data.status == "cancelled":
                 order.cancelled_at = datetime.utcnow()
         
@@ -2091,6 +3274,264 @@ async def get_admin_dashboard(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Dashboard error: {str(e)}")
 
 # =====================================================
+# STATISTICS ENDPOINTS (ADMIN)
+# =====================================================
+
+@app.get("/api/admin/statistics/revenue")
+async def get_revenue_statistics(
+    period: str = "day",  # day, month, year
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Thống kê doanh thu theo ngày/tháng/năm"""
+    try:
+        # Parse dates
+        if start_date:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start = datetime.now() - timedelta(days=30)
+        
+        if end_date:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end = datetime.now()
+        
+        # Query paid orders only
+        query = db.query(Order).filter(
+            Order.payment_status == "paid",
+            Order.created_at >= start,
+            Order.created_at <= end
+        )
+        
+        orders = query.all()
+        
+        # Calculate statistics
+        total_orders = len(orders)
+        total_books_sold = sum(
+            sum(item.quantity for item in order.order_items)
+            for order in orders
+        )
+        
+        # Calculate revenue components
+        total_revenue = sum(float(order.total_amount) for order in orders)  # Actual revenue after discount
+        total_discount = sum(float(order.discount_amount or 0) for order in orders)  # Total voucher discounts
+        total_revenue_before_discount = total_revenue + total_discount  # Revenue before voucher
+        
+        # Profit = revenue - cost (assuming original_price is cost)
+        total_profit = 0
+        for order in orders:
+            for item in order.order_items:
+                book = item.book
+                if book:
+                    # Profit per item = (selling price - original price) * quantity
+                    original_price = float(book.original_price) if book.original_price else float(book.price)
+                    selling_price = float(item.unit_price)
+                    profit_per_item = (selling_price - original_price) * item.quantity
+                    total_profit += profit_per_item
+        
+        # Adjust profit by subtracting voucher discounts (we gave away this money)
+        total_profit_after_discount = total_profit - total_discount
+        
+        return {
+            "period": period,
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d"),
+            "total_orders": total_orders,
+            "total_books_sold": total_books_sold,
+            "total_revenue": round(total_revenue, 2),  # Revenue after discount (actual money received)
+            "total_revenue_before_discount": round(total_revenue_before_discount, 2),  # Revenue before voucher
+            "total_discount": round(total_discount, 2),  # Total voucher discounts given
+            "total_profit": round(total_profit, 2),  # Profit before discount
+            "total_profit_after_discount": round(total_profit_after_discount, 2)  # Actual profit after voucher
+        }
+    except Exception as e:
+        print(f"❌ Revenue statistics error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error getting revenue statistics: {str(e)}")
+
+@app.get("/api/admin/statistics/books")
+async def get_book_statistics(
+    period: str = "day",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Thống kê doanh thu theo sách"""
+    try:
+        # Parse dates
+        if start_date:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start = datetime.now() - timedelta(days=30)
+        
+        if end_date:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end = datetime.now()
+        
+        # Get all order items in the period
+        order_items = db.query(OrderItem).join(Order).filter(
+            Order.payment_status == "paid",
+            Order.created_at >= start,
+            Order.created_at <= end
+        ).all()
+        
+        # Group by book
+        book_stats = {}
+        for item in order_items:
+            book = item.book
+            if not book:
+                continue
+            
+            book_id = book.id
+            if book_id not in book_stats:
+                original_price = float(book.original_price) if book.original_price else float(book.price)
+                book_stats[book_id] = {
+                    "book_id": book_id,
+                    "book_name": book.title,
+                    "category": book.category.name if book.category else "Unknown",
+                    "sold_quantity": 0,
+                    "revenue": 0.0,
+                    "profit": 0.0,
+                    "stock_remaining": book.stock_quantity
+                }
+            
+            # Update statistics
+            book_stats[book_id]["sold_quantity"] += item.quantity
+            book_stats[book_id]["revenue"] += float(item.unit_price) * item.quantity
+            
+            # Calculate profit
+            original_price = float(book.original_price) if book.original_price else float(book.price)
+            selling_price = float(item.unit_price)
+            profit = (selling_price - original_price) * item.quantity
+            book_stats[book_id]["profit"] += profit
+        
+        # Convert to list and sort by sold quantity
+        result = list(book_stats.values())
+        result.sort(key=lambda x: x["sold_quantity"], reverse=True)
+        
+        # Round numbers
+        for item in result:
+            item["revenue"] = round(item["revenue"], 2)
+            item["profit"] = round(item["profit"], 2)
+        
+        return {
+            "period": period,
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d"),
+            "books": result
+        }
+    except Exception as e:
+        print(f"❌ Book statistics error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error getting book statistics: {str(e)}")
+
+@app.get("/api/admin/statistics/categories")
+async def get_category_statistics(
+    period: str = "day",
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Thống kê doanh thu theo thể loại"""
+    try:
+        # Parse dates
+        if start_date:
+            start = datetime.strptime(start_date, "%Y-%m-%d")
+        else:
+            start = datetime.now() - timedelta(days=30)
+        
+        if end_date:
+            end = datetime.strptime(end_date, "%Y-%m-%d")
+        else:
+            end = datetime.now()
+        
+        # Get all order items in the period
+        order_items = db.query(OrderItem).join(Order).filter(
+            Order.payment_status == "paid",
+            Order.created_at >= start,
+            Order.created_at <= end
+        ).all()
+        
+        # Group by category and book
+        category_stats = {}
+        for item in order_items:
+            book = item.book
+            if not book or not book.category:
+                continue
+            
+            category_id = book.category.id
+            category_name = book.category.name
+            
+            if category_id not in category_stats:
+                category_stats[category_id] = {
+                    "category_id": category_id,
+                    "category_name": category_name,
+                    "books": {},
+                    "total_sold": 0,
+                    "total_profit": 0.0,
+                    "total_stock": 0
+                }
+            
+            book_id = book.id
+            if book_id not in category_stats[category_id]["books"]:
+                category_stats[category_id]["books"][book_id] = {
+                    "book_id": book_id,
+                    "book_name": book.title,
+                    "sold_quantity": 0,
+                    "profit": 0.0,
+                    "stock_remaining": book.stock_quantity
+                }
+            
+            # Update book stats
+            category_stats[category_id]["books"][book_id]["sold_quantity"] += item.quantity
+            
+            # Calculate profit
+            original_price = float(book.original_price) if book.original_price else float(book.price)
+            selling_price = float(item.unit_price)
+            profit = (selling_price - original_price) * item.quantity
+            category_stats[category_id]["books"][book_id]["profit"] += profit
+            
+            # Update category totals
+            category_stats[category_id]["total_sold"] += item.quantity
+            category_stats[category_id]["total_profit"] += profit
+        
+        # Calculate total stock for each category
+        for cat_id in category_stats:
+            total_stock = sum(
+                book_data["stock_remaining"]
+                for book_data in category_stats[cat_id]["books"].values()
+            )
+            category_stats[cat_id]["total_stock"] = total_stock
+            
+            # Convert books dict to list
+            category_stats[cat_id]["books"] = list(category_stats[cat_id]["books"].values())
+            
+            # Round numbers
+            category_stats[cat_id]["total_profit"] = round(category_stats[cat_id]["total_profit"], 2)
+            for book in category_stats[cat_id]["books"]:
+                book["profit"] = round(book["profit"], 2)
+        
+        # Convert to list and sort by total sold
+        result = list(category_stats.values())
+        result.sort(key=lambda x: x["total_sold"], reverse=True)
+        
+        return {
+            "period": period,
+            "start_date": start.strftime("%Y-%m-%d"),
+            "end_date": end.strftime("%Y-%m-%d"),
+            "categories": result
+        }
+    except Exception as e:
+        print(f"❌ Category statistics error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error getting category statistics: {str(e)}")
+
+# =====================================================
 # SEARCH ENDPOINTS
 # =====================================================
 
@@ -2175,7 +3616,7 @@ async def search_books(
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv('PORT', 7000))
+    port = int(os.getenv('PORT', 8000))
     print(f"🚀 Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 

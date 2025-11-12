@@ -7,7 +7,7 @@ DB_HOST=localhost
 DB_PORT=5432
 DB_NAME=bookstore_online
 DB_USER=postgres
-DB_PASSWORD=password
+DB_PASSWORD=openpgpwd
 
 # JWT Secret (thay đổi trong production)
 JWT_SECRET_KEY=your-super-secret-jwt-key-change-this-in-production
@@ -26,11 +26,12 @@ CORS_ORIGINS=["http://localhost:3000", "http://localhost:8080", "http://127.0.0.
 MAX_FILE_SIZE=10485760  # 10MB
 UPLOAD_FOLDER=uploads
 
-# Email Settings (tùy chọn)
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=your-email@gmail.com
-SMTP_PASSWORD=your-app-password
+SMTP_USERNAME=thucxitrum18@gmail.com
+SMTP_PASSWORD=mvswtwbkcdopaibu
+FROM_EMAIL=thucxitrum18@gmail.com
+FROM_NAME=BookStore
 
 # Redis Settings (cho caching, tùy chọn)
 REDIS_HOST=localhost
