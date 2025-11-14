@@ -28,8 +28,8 @@ UPLOAD_FOLDER=uploads
 
 SMTP_HOST=smtp.gmail.com
 SMTP_PORT=587
-SMTP_USERNAME=thucxitrum18@gmail.com
-SMTP_PASSWORD=mvswtwbkcdopaibu
+SMTP_USERNAME=
+SMTP_PASSWORD=
 FROM_EMAIL=thucxitrum18@gmail.com
 FROM_NAME=BookStore
 
