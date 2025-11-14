@@ -1,6 +1,3 @@
-# =====================================================
-# FASTAPI MAIN APPLICATION CHO BOOKSTORE BACKEND
-# =====================================================
 
 from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,21 +20,15 @@ import secrets
 from typing import Optional, List
 import shutil
 
-# Load environment variables
 load_dotenv()
 
-# Get base URL from environment or use default
-# To change URL, set environment variable: export BASE_URL="new_url_here"
-# Or update this default value
 BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-7000.asse.devtunnels.ms')
 print(f"Using BASE_URL: {BASE_URL}")
 
-# Import database and models
 from database import get_db, engine, Base
 from models import *
 from email_service import EmailService
 
-# Create FastAPI app
 app = FastAPI(
     title="BookStore API",
     description="API cho ứng dụng bán sách online",
@@ -59,22 +50,22 @@ async def add_charset_header(request: Request, call_next):
 @app.on_event("startup")
 async def startup_event():
     """Create tables if they don't exist and start app"""
-    print("🚀 BookStore API đang khởi động...")
+    print("BookStore API starting...")
     
     # Create uploads directory
     upload_dir = "uploads/books"
     os.makedirs(upload_dir, exist_ok=True)
-    print("✅ Upload directory created")
+    print("Upload directory created")
     
     # Auto-create tables
     try:
         Base.metadata.create_all(bind=engine)
-        print("✅ Database tables checked/created")
+        print("Database tables checked/created")
     except Exception as e:
-        print(f"⚠️ Could not create tables: {e}")
-        print("💡 Run: python setup_database.py to setup database")
+        print(f"Warning: Could not create tables: {e}")
+        print("Tip: Run: python setup_database.py to setup database")
     
-    print("📚 API Documentation available at /docs")
+    print("API Documentation available at /docs")
 
 # CORS middleware
 app.add_middleware(
@@ -89,14 +80,14 @@ app.add_middleware(
 upload_dir = os.path.join(os.getcwd(), "uploads")
 if not os.path.exists(upload_dir):
     os.makedirs(upload_dir, exist_ok=True)
-    print(f"📁 Created uploads directory: {upload_dir}")
+    print(f"Created uploads directory: {upload_dir}")
 
 # Mount static files for uploaded images
 try:
     app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
-    print("✅ Static files mounted at /uploads")
+    print("Static files mounted at /uploads")
 except Exception as e:
-    print(f"⚠️ Could not mount static files: {e}")
+    print(f"Warning: Could not mount static files: {e}")
 
 # Security
 security = HTTPBearer()
@@ -104,9 +95,7 @@ security = HTTPBearer()
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# =====================================================
 # PYDANTIC MODELS
-# =====================================================
 
 class UserCreate(BaseModel):
     username: str
@@ -174,6 +163,18 @@ class BookUpdate(BaseModel):
     is_active: Optional[bool] = None
     is_featured: Optional[bool] = None
     is_bestseller: Optional[bool] = None
+    # Additional fields for complete update
+    category_id: Optional[int] = None
+    publisher_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    language: Optional[str] = None
+    cover_type: Optional[str] = None
+    pages: Optional[int] = None
+    publication_year: Optional[int] = None
+    length: Optional[float] = None
+    width: Optional[float] = None
+    thickness: Optional[float] = None
+    weight: Optional[int] = None
 
 class OrderCreate(BaseModel):
     user_id: int
@@ -200,9 +201,7 @@ class BookReviewCreate(BaseModel):
 class WishlistItemCreate(BaseModel):
     book_id: int
 
-# =====================================================
 # HELPER FUNCTIONS
-# =====================================================
 
 def verify_password(plain_password, hashed_password):
     """Verify password using bcrypt"""
@@ -236,8 +235,7 @@ def validate_phone(phone):
     if not phone or phone.strip() == '':
         return True
     # Allow Vietnamese phone numbers with or without country code
-    # Examples: 0123456789, 0912345678, +84912345678, 091-234-5678
-    cleaned_phone = re.sub(r'[\s\-\(\)]', '', phone)  # Remove spaces, dashes, parentheses
+    cleaned_phone = re.sub(r'[\s\-\(\)]', '', phone)  
     pattern = r'^(\+?84|0)[0-9]{9,10}$'
     return re.match(pattern, cleaned_phone) is not None
 
@@ -252,9 +250,7 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
         raise HTTPException(status_code=401, detail="Invalid authentication credentials")
     return user
 
-# =====================================================
 # HEALTH CHECK ENDPOINTS
-# =====================================================
 
 @app.get("/")
 async def root():
@@ -1233,6 +1229,7 @@ async def get_books(
                 "original_price": float(book.original_price) if book.original_price else None,
                 "discount_percentage": float(book.discount_percentage),
                 "stock_quantity": book.stock_quantity,
+                "sold_quantity": book.sold_quantity,
                 "rating_average": float(book.rating_average),
                 "rating_count": book.rating_count,
                 "category": {
@@ -1256,6 +1253,94 @@ async def get_books(
         ],
         "total": len(books)
     }
+@app.get("/api/books/featured")
+async def get_featured_books(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
+    """Lấy danh sách sách nổi bật"""
+    books = db.query(Book).filter(
+        Book.is_active == True,
+        Book.is_featured == True
+    ).order_by(Book.rating_average.desc(), Book.sold_quantity.desc()).offset(skip).limit(limit).all()
+    
+    return {
+        "books": [
+            {
+                "id": book.id,
+                "title": book.title,
+                "slug": book.slug,
+                "description": book.description,
+                "price": float(book.price),
+                "original_price": float(book.original_price) if book.original_price else None,
+                "discount_percentage": float(book.discount_percentage),
+                "stock_quantity": book.stock_quantity,
+                "sold_quantity": book.sold_quantity,
+                "rating_average": float(book.rating_average),
+                "rating_count": book.rating_count,
+                "category": {
+                    "id": book.category.id if book.category else None,
+                    "name": book.category.name if book.category else None
+                },
+                "publisher": book.publisher.name if book.publisher else None,
+                "images": [
+                    {
+                        "id": img.id,
+                        "url": img.image_url,
+                        "is_primary": img.is_primary
+                    }
+                    for img in book.book_images
+                ],
+                "is_featured": book.is_featured,
+                "is_bestseller": book.is_bestseller,
+                "created_at": book.created_at
+            }
+            for book in books
+        ],
+        "total": len(books)
+    }
+
+@app.get("/api/books/bestsellers")
+async def get_bestseller_books(skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
+    """Lấy danh sách sách bán chạy"""
+    books = db.query(Book).filter(
+        Book.is_active == True,
+        Book.is_bestseller == True
+    ).order_by(Book.sold_quantity.desc(), Book.rating_average.desc()).offset(skip).limit(limit).all()
+    
+    return {
+        "books": [
+            {
+                "id": book.id,
+                "title": book.title,
+                "slug": book.slug,
+                "description": book.description,
+                "price": float(book.price),
+                "original_price": float(book.original_price) if book.original_price else None,
+                "discount_percentage": float(book.discount_percentage),
+                "stock_quantity": book.stock_quantity,
+                "sold_quantity": book.sold_quantity,
+                "rating_average": float(book.rating_average),
+                "rating_count": book.rating_count,
+                "category": {
+                    "id": book.category.id if book.category else None,
+                    "name": book.category.name if book.category else None
+                },
+                "publisher": book.publisher.name if book.publisher else None,
+                "images": [
+                    {
+                        "id": img.id,
+                        "url": img.image_url,
+                        "is_primary": img.is_primary
+                    }
+                    for img in book.book_images
+                ],
+                "is_featured": book.is_featured,
+                "is_bestseller": book.is_bestseller,
+                "created_at": book.created_at
+            }
+            for book in books
+        ],
+        "total": len(books)
+    }
+
 
 @app.get("/api/books/{book_id}")
 async def get_book(book_id: int, db: Session = Depends(get_db)):
@@ -1428,11 +1513,12 @@ async def upload_book_image(
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        # Convert Windows path to URL path
+        # Convert Windows path to URL path (relative path only)
         url_path = file_path.replace("\\", "/")
-        image_url = f"{BASE_URL}/{url_path}"
-        
-        print(f"📸 Image saved with URL: {image_url}")  # Debug log
+        # Store relative path instead of absolute URL
+        image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
+
+        print(f"📸 Image saved with relative path: {image_url}")  # Debug log
         new_image = BookImage(
             book_id=book_id,
             image_url=image_url,
@@ -1489,11 +1575,12 @@ async def upload_multiple_book_images(
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            # Convert Windows path to URL path
+            # Convert Windows path to URL path (relative path only)
             url_path = file_path.replace("\\", "/")
-            image_url = f"{BASE_URL}/{url_path}"
-            
-            print(f"📸 Saving image {index+1} with URL: {image_url}")
+            # Store relative path instead of absolute URL
+            image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
+
+            print(f"📸 Saving image {index+1} with relative path: {image_url}")
             
             # Add image to database
             new_image = BookImage(
@@ -1676,11 +1763,12 @@ async def create_book_with_image(
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             
-            # Convert Windows path to URL path
+            # Convert Windows path to URL path (relative path only)
             url_path = file_path.replace("\\", "/")
-            image_url = f"{BASE_URL}/{url_path}"
-            
-            print(f"📸 Saving image with URL: {image_url}")  # Debug log
+            # Store relative path instead of absolute URL
+            image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
+
+            print(f"📸 Saving image with relative path: {image_url}")  # Debug log
             
             # Add image to database
             new_image = BookImage(
@@ -1789,6 +1877,30 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
     if book_data.is_bestseller is not None:
         book.is_bestseller = book_data.is_bestseller
     
+    # Update additional fields
+    if book_data.category_id is not None:
+        book.category_id = book_data.category_id
+    if book_data.publisher_id is not None:
+        book.publisher_id = book_data.publisher_id
+    if book_data.supplier_id is not None:
+        book.supplier_id = book_data.supplier_id
+    if book_data.language is not None:
+        book.language = book_data.language
+    if book_data.cover_type is not None:
+        book.cover_type = book_data.cover_type
+    if book_data.pages is not None:
+        book.pages = book_data.pages
+    if book_data.publication_year is not None:
+        book.publication_year = book_data.publication_year
+    if book_data.length is not None:
+        book.length = book_data.length
+    if book_data.width is not None:
+        book.width = book_data.width
+    if book_data.thickness is not None:
+        book.thickness = book_data.thickness
+    if book_data.weight is not None:
+        book.weight = book_data.weight
+    
     book.updated_at = datetime.utcnow()
     
     try:
@@ -1822,6 +1934,91 @@ async def delete_book(book_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa sách: {str(e)}")
+
+
+@app.patch("/api/admin/books/{book_id}/toggle-featured")
+async def toggle_book_featured(book_id: int, db: Session = Depends(get_db)):
+    """Toggle trạng thái nổi bật của sách"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    book.is_featured = not book.is_featured
+    book.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        db.refresh(book)
+        return {
+            "message": f"Sách {'đã được đánh dấu' if book.is_featured else 'đã bỏ đánh dấu'} nổi bật",
+            "is_featured": book.is_featured
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/admin/books/{book_id}/toggle-bestseller")
+async def toggle_book_bestseller(book_id: int, db: Session = Depends(get_db)):
+    """Toggle trạng thái bestseller của sách"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    book.is_bestseller = not book.is_bestseller
+    book.updated_at = datetime.utcnow()
+
+    try:
+        db.commit()
+        db.refresh(book)
+        return {
+            "message": f"Sách {'đã được đánh dấu' if book.is_bestseller else 'đã bỏ đánh dấu'} bestseller",
+            "is_bestseller": book.is_bestseller
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/admin/books/{book_id}/toggle-featured")
+async def toggle_book_featured(book_id: int, db: Session = Depends(get_db)):
+    """Toggle trang thai noi bat cua sach"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    book.is_featured = not book.is_featured
+    book.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        db.refresh(book)
+        return {
+            "message": f"Book featured status updated",
+            "is_featured": book.is_featured
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/admin/books/{book_id}/toggle-bestseller")
+async def toggle_book_bestseller(book_id: int, db: Session = Depends(get_db)):
+    """Toggle trang thai bestseller cua sach"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    book.is_bestseller = not book.is_bestseller
+    book.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        db.refresh(book)
+        return {
+            "message": f"Book bestseller status updated",
+            "is_bestseller": book.is_bestseller
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/books/{book_id}/reviews")
 async def get_book_reviews(book_id: int, skip: int = 0, limit: int = 20, db: Session = Depends(get_db)):
@@ -2137,6 +2334,231 @@ async def create_author(pen_name: str, db: Session = Depends(get_db)):
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo tác giả: {str(e)}")
+
+@app.put("/api/books/{book_id}/authors")
+async def update_book_authors(
+    book_id: int,
+    author_ids: List[int],
+    db: Session = Depends(get_db)
+):
+    """Cập nhật danh sách tác giả cho sách (Admin only)"""
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    
+    try:
+        # Xóa tất cả liên kết tác giả cũ
+        db.query(BookAuthor).filter(BookAuthor.book_id == book_id).delete()
+        
+        # Thêm liên kết tác giả mới
+        for author_id in author_ids:
+            # Kiểm tra tác giả tồn tại
+            author = db.query(Author).filter(Author.id == author_id).first()
+            if not author:
+                raise HTTPException(status_code=404, detail=f"Author with id {author_id} not found")
+            
+            book_author = BookAuthor(
+                book_id=book_id,
+                author_id=author_id,
+                role='author'
+            )
+            db.add(book_author)
+        
+        db.commit()
+        
+        return {
+            "message": "Đã cập nhật danh sách tác giả thành công",
+            "book_id": book_id,
+            "author_count": len(author_ids)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật tác giả: {str(e)}")
+
+@app.get("/api/books/by-author/{author_id}")
+async def get_books_by_author(
+    author_id: int,
+    skip: int = 0,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """Lấy danh sách sách theo tác giả"""
+    # Kiểm tra tác giả tồn tại
+    author = db.query(Author).filter(Author.id == author_id).first()
+    if not author:
+        raise HTTPException(status_code=404, detail="Author not found")
+    
+    # Lấy danh sách book_id từ BookAuthor
+    book_ids = db.query(BookAuthor.book_id).filter(
+        BookAuthor.author_id == author_id
+    ).all()
+    book_ids = [bid[0] for bid in book_ids]
+    
+    # Lấy thông tin sách
+    books = db.query(Book).filter(
+        Book.id.in_(book_ids),
+        Book.is_active == True
+    ).offset(skip).limit(limit).all()
+    
+    return {
+        "author": {
+            "id": author.id,
+            "pen_name": author.pen_name
+        },
+        "books": [
+            {
+                "id": book.id,
+                "title": book.title,
+                "slug": book.slug,
+                "description": book.description,
+                "price": float(book.price),
+                "original_price": float(book.original_price) if book.original_price else None,
+                "discount_percentage": float(book.discount_percentage),
+                "stock_quantity": book.stock_quantity,
+                "sold_quantity": book.sold_quantity,
+                "rating_average": float(book.rating_average),
+                "rating_count": book.rating_count,
+                "category": {
+                    "id": book.category.id if book.category else None,
+                    "name": book.category.name if book.category else None
+                },
+                "publisher": book.publisher.name if book.publisher else None,
+                "images": [
+                    {
+                        "id": img.id,
+                        "url": img.image_url,
+                        "is_primary": img.is_primary
+                    }
+                    for img in book.book_images
+                ],
+                "is_featured": book.is_featured,
+                "is_bestseller": book.is_bestseller,
+                "created_at": book.created_at
+            }
+            for book in books
+        ],
+        "total": len(books)
+    }
+
+# =====================================================
+# PUBLISHER ENDPOINTS
+# =====================================================
+
+@app.get("/api/publishers")
+async def get_publishers(db: Session = Depends(get_db)):
+    """Lấy danh sách nhà xuất bản"""
+    publishers = db.query(Publisher).filter(Publisher.is_active == True).all()
+    
+    return {
+        "publishers": [
+            {
+                "id": pub.id,
+                "name": pub.name,
+                "contact_email": pub.contact_email,
+                "contact_phone": pub.contact_phone,
+                "created_at": pub.created_at.isoformat() if pub.created_at else None
+            }
+            for pub in publishers
+        ]
+    }
+
+@app.post("/api/publishers")
+async def create_publisher(
+    name: str = Form(...),
+    contact_email: str = Form(None),
+    contact_phone: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Tạo nhà xuất bản mới"""
+    # Check if publisher exists
+    existing = db.query(Publisher).filter(Publisher.name == name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Nhà xuất bản đã tồn tại")
+    
+    new_publisher = Publisher(
+        name=name,
+        contact_email=contact_email,
+        contact_phone=contact_phone,
+        is_active=True
+    )
+    
+    try:
+        db.add(new_publisher)
+        db.commit()
+        db.refresh(new_publisher)
+        
+        return {
+            "id": new_publisher.id,
+            "name": new_publisher.name,
+            "message": "Nhà xuất bản đã được tạo thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tạo nhà xuất bản: {str(e)}")
+
+# =====================================================
+# SUPPLIER ENDPOINTS
+# =====================================================
+
+@app.get("/api/suppliers")
+async def get_suppliers(db: Session = Depends(get_db)):
+    """Lấy danh sách nhà cung cấp"""
+    suppliers = db.query(Supplier).filter(Supplier.is_active == True).all()
+    
+    return {
+        "suppliers": [
+            {
+                "id": sup.id,
+                "name": sup.name,
+                "contact_person": sup.contact_person,
+                "email": sup.email,
+                "phone": sup.phone,
+                "address": sup.address,
+                "created_at": sup.created_at.isoformat() if sup.created_at else None
+            }
+            for sup in suppliers
+        ]
+    }
+
+@app.post("/api/suppliers")
+async def create_supplier(
+    name: str = Form(...),
+    contact_person: str = Form(None),
+    email: str = Form(None),
+    phone: str = Form(None),
+    address: str = Form(None),
+    db: Session = Depends(get_db)
+):
+    """Tạo nhà cung cấp mới"""
+    # Check if supplier exists
+    existing = db.query(Supplier).filter(Supplier.name == name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Nhà cung cấp đã tồn tại")
+    
+    new_supplier = Supplier(
+        name=name,
+        contact_person=contact_person,
+        email=email,
+        phone=phone,
+        address=address,
+        is_active=True
+    )
+    
+    try:
+        db.add(new_supplier)
+        db.commit()
+        db.refresh(new_supplier)
+        
+        return {
+            "id": new_supplier.id,
+            "name": new_supplier.name,
+            "message": "Nhà cung cấp đã được tạo thành công"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Lỗi khi tạo nhà cung cấp: {str(e)}")
 
 # =====================================================
 # CART ENDPOINTS
@@ -3424,7 +3846,7 @@ async def get_book_statistics(
             "books": result
         }
     except Exception as e:
-        print(f"❌ Book statistics error: {str(e)}")
+        print(f" Book statistics error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error getting book statistics: {str(e)}")
@@ -3609,15 +4031,10 @@ async def search_books(
         }
     }
 
-# =====================================================
-# STARTUP EVENT
-# =====================================================
-# (Moved to top of file)
-
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv('PORT', 8000))
-    print(f"🚀 Starting server on port {port}")
+    print(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 
 
