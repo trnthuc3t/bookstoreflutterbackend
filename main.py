@@ -28,6 +28,15 @@ print(f"Using BASE_URL: {BASE_URL}")
 from database import get_db, engine, Base
 from models import *
 from email_service import EmailService
+# Import JWT utilities
+from jwt_utils import (
+    create_tokens_for_user,
+    get_current_user,
+    get_current_active_user,
+    get_current_admin_user,
+    refresh_access_token
+)
+
 
 app = FastAPI(
     title="BookStore API",
@@ -242,19 +251,12 @@ def validate_phone(phone):
 def generate_order_number():
     return f"ORD-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
-    """Get current user from JWT token (placeholder - implement JWT later)"""
-    # For now, return a mock user - implement JWT authentication later
-    user = db.query(User).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid authentication credentials")
-    return user
+# Note: get_current_user is now imported from jwt_utils
 
 # HEALTH CHECK ENDPOINTS
 
 @app.get("/")
 async def root():
-    """Root endpoint"""
     return {
         "message": "Welcome to BookStore API",
         "version": "1.0.0",
@@ -264,7 +266,6 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
     try:
         # Test database connection
         db = next(get_db())
@@ -290,19 +291,15 @@ async def api_health():
         "version": "1.0.0"
     }
 
-# =====================================================
 # AUTHENTICATION ENDPOINTS
-# =====================================================
 
 @app.post("/api/auth/register", response_model=UserResponse)
 async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
     """Đăng ký tài khoản người dùng mới"""
     
-    # Validate email format
     if not validate_email(user_data.email):
         raise HTTPException(status_code=400, detail="Email không hợp lệ")
     
-    # Validate phone format
     if user_data.phone and not validate_phone(user_data.phone):
         raise HTTPException(status_code=400, detail="Số điện thoại không hợp lệ")
     
@@ -394,7 +391,7 @@ async def register_user(user_data: UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/api/auth/login", response_model=LoginResponse)
 async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
-    """Đăng nhập người dùng"""
+    """Đăng nhập người dùng với JWT authentication"""
     
     # Find user by username or email
     user = db.query(User).filter(
@@ -410,10 +407,12 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Tài khoản đã bị khóa")
     
+    # Update last login time
+    user.last_login = datetime.utcnow()
     db.commit()
     
-    # Generate token (placeholder - implement JWT later)
-    access_token = f"mock_token_{user.id}_{datetime.now().timestamp()}"
+    # Generate JWT tokens
+    tokens = create_tokens_for_user(user)
     
     # Get role name
     role_name = None
@@ -421,8 +420,8 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
         role_name = user.role.role_name
     
     return LoginResponse(
-        access_token=access_token,
-        token_type="bearer",
+        access_token=tokens["access_token"],
+        token_type=tokens["token_type"],
         user=UserResponse(
             id=user.id,
             username=user.username,
@@ -435,6 +434,17 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
             created_at=user.created_at
         )
     )
+
+@app.post("/api/auth/refresh")
+async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
+    """Refresh access token using refresh token"""
+    try:
+        result = refresh_access_token(refresh_token, db)
+        return result
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 @app.get("/api/auth/check-username/{username}")
 async def check_username(username: str, db: Session = Depends(get_db)):
@@ -698,9 +708,9 @@ async def forgot_password(email: str, db: Session = Depends(get_db)):
             username=user.username,
             reset_link=reset_link
         )
-        print(f"📧 Password reset email sent to {user.email}")
+        print(f" Password reset email sent to {user.email}")
     except Exception as e:
-        print(f"⚠️ Failed to send password reset email: {str(e)}")
+        print(f" Failed to send password reset email: {str(e)}")
     
     return {"message": "Nếu email tồn tại trong hệ thống, bạn sẽ nhận được email hướng dẫn đặt lại mật khẩu"}
 
@@ -732,7 +742,7 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="container">
-                <div class="icon">❌</div>
+                <div class="icon"></div>
                 <h1>Token không hợp lệ</h1>
                 <p>Token không hợp lệ hoặc đã được sử dụng. Vui lòng yêu cầu đặt lại mật khẩu lại.</p>
             </div>
@@ -787,7 +797,7 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="container">
-                <div class="icon">❌</div>
+                <div class="icon"></div>
                 <h1>Lỗi</h1>
                 <p>Người dùng không tồn tại.</p>
             </div>
@@ -821,11 +831,11 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
     </head>
     <body>
         <div class="container">
-            <div class="icon">🔐</div>
+            <div class="icon"></div>
             <h1>Đặt lại mật khẩu</h1>
             <p>Xin chào <strong>{user.username}</strong>, vui lòng nhập mật khẩu mới</p>
             <div class="info">
-                <small>⚠️ Mật khẩu phải có ít nhất 6 ký tự</small>
+                <small> Mật khẩu phải có ít nhất 6 ký tự</small>
             </div>
             <form id="resetForm">
                 <div class="form-group">
@@ -870,13 +880,13 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
                     const data = await response.json();
                     
                     if (response.ok) {{
-                        messageDiv.innerHTML = '<p class="success">✅ ' + data.message + '</p>';
+                        messageDiv.innerHTML = '<p class="success">' + data.message + '</p>';
                         document.getElementById('resetForm').innerHTML = '<p class="success">Đặt lại mật khẩu thành công! Bạn có thể đăng nhập ngay bây giờ.</p>';
                     }} else {{
-                        messageDiv.innerHTML = '<p class="error">❌ ' + data.detail + '</p>';
+                        messageDiv.innerHTML = '<p class="error"> ' + data.detail + '</p>';
                     }}
                 }} catch (error) {{
-                    messageDiv.innerHTML = '<p class="error">❌ Lỗi kết nối server</p>';
+                    messageDiv.innerHTML = '<p class="error"> Lỗi kết nối server</p>';
                 }}
             }});
         </script>
@@ -933,8 +943,13 @@ async def reset_password(request: ResetPasswordRequest, db: Session = Depends(ge
 # =====================================================
 
 @app.get("/api/users")
-async def get_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Lấy danh sách người dùng"""
+async def get_users(
+    skip: int = 0,
+    limit: int = 100,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Lấy danh sách người dùng (Admin only)"""
     users = db.query(User).offset(skip).limit(limit).all()
     return {
         "users": [
@@ -954,8 +969,15 @@ async def get_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_d
     }
 
 @app.get("/api/users/{user_id}")
-async def get_user(user_id: int, db: Session = Depends(get_db)):
+async def get_user(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Lấy thông tin người dùng theo ID"""
+    # Users can only view their own profile unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this user")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -973,8 +995,16 @@ async def get_user(user_id: int, db: Session = Depends(get_db)):
     }
 
 @app.put("/api/users/{user_id}")
-async def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends(get_db)):
+async def update_user(
+    user_id: int,
+    user_data: UserUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật thông tin người dùng"""
+    # Users can only update their own profile unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to update this user")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1022,8 +1052,15 @@ async def update_user(user_id: int, user_data: UserUpdate, db: Session = Depends
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật thông tin: {str(e)}")
 
 @app.post("/api/users/{user_id}/change-password")
-async def change_password(user_id: int, password_data: PasswordChange, db: Session = Depends(get_db)):
-    """Đổi mật khẩu người dùng"""
+async def change_password(
+    user_id: int,
+    password_data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Users can only change their own password
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to change this password")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1044,8 +1081,14 @@ async def change_password(user_id: int, password_data: PasswordChange, db: Sessi
         raise HTTPException(status_code=500, detail=f"Lỗi khi đổi mật khẩu: {str(e)}")
 
 @app.get("/api/users/{user_id}/addresses")
-async def get_user_addresses(user_id: int, db: Session = Depends(get_db)):
-    """Lấy danh sách địa chỉ của người dùng"""
+async def get_user_addresses(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Users can only view their own addresses unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view these addresses")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1072,8 +1115,16 @@ async def get_user_addresses(user_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/users/{user_id}/addresses")
-async def create_user_address(user_id: int, address_data: dict, db: Session = Depends(get_db)):
+async def create_user_address(
+    user_id: int,
+    address_data: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Tạo địa chỉ mới cho người dùng"""
+    # Users can only create addresses for themselves
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to create address for this user")
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
@@ -1109,8 +1160,17 @@ async def create_user_address(user_id: int, address_data: dict, db: Session = De
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo địa chỉ: {str(e)}")
 
 @app.put("/api/users/{user_id}/addresses/{address_id}")
-async def update_user_address(user_id: int, address_id: int, address_data: dict, db: Session = Depends(get_db)):
+async def update_user_address(
+    user_id: int,
+    address_id: int,
+    address_data: dict,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật địa chỉ của người dùng"""
+    # Users can only update their own addresses
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to update this address")
     # Check if user exists
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -1157,8 +1217,16 @@ async def update_user_address(user_id: int, address_id: int, address_data: dict,
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật địa chỉ: {str(e)}")
 
 @app.delete("/api/users/{user_id}/addresses/{address_id}")
-async def delete_user_address(user_id: int, address_id: int, db: Session = Depends(get_db)):
+async def delete_user_address(
+    user_id: int,
+    address_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Xóa địa chỉ của người dùng"""
+    # Users can only delete their own addresses
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to delete this address")
     # Check if user exists
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -1389,6 +1457,7 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "original_price": float(book.original_price) if book.original_price else None,
         "discount_percentage": float(book.discount_percentage),
         "stock_quantity": book.stock_quantity,
+        "sold_quantity": book.sold_quantity,
         "rating_average": float(book.rating_average),
         "rating_count": book.rating_count,
         "pages": book.pages,
@@ -1518,7 +1587,7 @@ async def upload_book_image(
         # Store relative path instead of absolute URL
         image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
 
-        print(f"📸 Image saved with relative path: {image_url}")  # Debug log
+        print(f"Image saved with relative path: {image_url}")  # Debug log
         new_image = BookImage(
             book_id=book_id,
             image_url=image_url,
@@ -1580,7 +1649,7 @@ async def upload_multiple_book_images(
             # Store relative path instead of absolute URL
             image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
 
-            print(f"📸 Saving image {index+1} with relative path: {image_url}")
+            print(f"Saving image {index+1} with relative path: {image_url}")
             
             # Add image to database
             new_image = BookImage(
@@ -1598,7 +1667,7 @@ async def upload_multiple_book_images(
         
         db.commit()
         
-        print(f"✅ Uploaded {len(uploaded_images)} images for book #{book_id}")
+        print(f"Uploaded {len(uploaded_images)} images for book #{book_id}")
         
         return {
             "book_id": book_id,
@@ -1608,11 +1677,15 @@ async def upload_multiple_book_images(
         }
     except Exception as e:
         db.rollback()
-        print(f"❌ Error uploading images: {str(e)}")
+        print(f"Error uploading images: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi upload ảnh: {str(e)}")
 
 @app.post("/api/books")
-async def create_book(book_data: BookCreate, db: Session = Depends(get_db)):
+async def create_book(
+    book_data: BookCreate,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Tạo sách mới (Admin only)"""
     # Generate slug from title
     slug = book_data.title.lower().replace(" ", "-").replace("_", "-")
@@ -1768,7 +1841,7 @@ async def create_book_with_image(
             # Store relative path instead of absolute URL
             image_url = f"/{url_path}"  # /uploads/books/xxx.jpg
 
-            print(f"📸 Saving image with relative path: {image_url}")  # Debug log
+            print(f"Saving image with relative path: {image_url}")  # Debug log
             
             # Add image to database
             new_image = BookImage(
@@ -1800,7 +1873,7 @@ async def create_book_with_image(
                         role='author'
                     )
                     db.add(book_author)
-                    print(f"✅ Added author: {author.pen_name}")
+                    print(f" Added author: {author.pen_name}")
         
         db.commit()
         db.refresh(new_book)
@@ -1818,7 +1891,12 @@ async def create_book_with_image(
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo sách: {str(e)}")
 
 @app.put("/api/books/{book_id}")
-async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends(get_db)):
+async def update_book(
+    book_id: int,
+    book_data: BookUpdate,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật thông tin sách (Admin only)"""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -1918,7 +1996,11 @@ async def update_book(book_id: int, book_data: BookUpdate, db: Session = Depends
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật sách: {str(e)}")
 
 @app.delete("/api/books/{book_id}")
-async def delete_book(book_id: int, db: Session = Depends(get_db)):
+async def delete_book(
+    book_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Xóa sách (Admin only)"""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -1937,7 +2019,11 @@ async def delete_book(book_id: int, db: Session = Depends(get_db)):
 
 
 @app.patch("/api/admin/books/{book_id}/toggle-featured")
-async def toggle_book_featured(book_id: int, db: Session = Depends(get_db)):
+async def toggle_book_featured(
+    book_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Toggle trạng thái nổi bật của sách"""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -1958,7 +2044,11 @@ async def toggle_book_featured(book_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.patch("/api/admin/books/{book_id}/toggle-bestseller")
-async def toggle_book_bestseller(book_id: int, db: Session = Depends(get_db)):
+async def toggle_book_bestseller(
+    book_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Toggle trạng thái bestseller của sách"""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -1972,48 +2062,6 @@ async def toggle_book_bestseller(book_id: int, db: Session = Depends(get_db)):
         db.refresh(book)
         return {
             "message": f"Sách {'đã được đánh dấu' if book.is_bestseller else 'đã bỏ đánh dấu'} bestseller",
-            "is_bestseller": book.is_bestseller
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.patch("/api/admin/books/{book_id}/toggle-featured")
-async def toggle_book_featured(book_id: int, db: Session = Depends(get_db)):
-    """Toggle trang thai noi bat cua sach"""
-    book = db.query(Book).filter(Book.id == book_id).first()
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-    
-    book.is_featured = not book.is_featured
-    book.updated_at = datetime.utcnow()
-    
-    try:
-        db.commit()
-        db.refresh(book)
-        return {
-            "message": f"Book featured status updated",
-            "is_featured": book.is_featured
-        }
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.patch("/api/admin/books/{book_id}/toggle-bestseller")
-async def toggle_book_bestseller(book_id: int, db: Session = Depends(get_db)):
-    """Toggle trang thai bestseller cua sach"""
-    book = db.query(Book).filter(Book.id == book_id).first()
-    if not book:
-        raise HTTPException(status_code=404, detail="Book not found")
-    
-    book.is_bestseller = not book.is_bestseller
-    book.updated_at = datetime.utcnow()
-    
-    try:
-        db.commit()
-        db.refresh(book)
-        return {
-            "message": f"Book bestseller status updated",
             "is_bestseller": book.is_bestseller
         }
     except Exception as e:
@@ -2070,7 +2118,7 @@ async def check_single_order_review(order_id: int, user_id: int, db: Session = D
         # All products have been reviewed
         return {"has_reviewed": True}
     except Exception as e:
-        print(f"❌ Check review error: {str(e)}")
+        print(f"Check review error: {str(e)}")
         return {"has_reviewed": False}
 
 @app.post("/api/reviews/check-batch")
@@ -2268,9 +2316,7 @@ async def create_book_review(
         print(f"❌ Error creating review: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo đánh giá: {str(e)}")
 
-# =====================================================
 # CATEGORY ENDPOINTS
-# =====================================================
 
 @app.get("/api/categories")
 async def get_categories(db: Session = Depends(get_db)):
@@ -2291,9 +2337,7 @@ async def get_categories(db: Session = Depends(get_db)):
         ]
     }
 
-# =====================================================
 # AUTHOR ENDPOINTS
-# =====================================================
 
 @app.get("/api/authors")
 async def get_authors(db: Session = Depends(get_db)):
@@ -2313,8 +2357,7 @@ async def get_authors(db: Session = Depends(get_db)):
 
 @app.post("/api/authors")
 async def create_author(pen_name: str, db: Session = Depends(get_db)):
-    """Tạo tác giả mới"""
-    # Check if author exists
+    # Tạo tác giả mới
     existing = db.query(Author).filter(Author.pen_name == pen_name).first()
     if existing:
         raise HTTPException(status_code=400, detail="Tác giả đã tồn tại")
@@ -2565,8 +2608,15 @@ async def create_supplier(
 # =====================================================
 
 @app.get("/api/cart/{user_id}")
-async def get_cart(user_id: int, db: Session = Depends(get_db)):
+async def get_cart(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Lấy giỏ hàng của người dùng"""
+    # Users can only view their own cart unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this cart")
     cart_items = db.query(CartItem).options(
         joinedload(CartItem.book).joinedload(Book.book_images)
     ).filter(CartItem.user_id == user_id).all()
@@ -2596,9 +2646,12 @@ async def add_to_cart(
     user_id: int,
     book_id: int,
     quantity: int = 1,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Thêm sách vào giỏ hàng"""
+    # Users can only add to their own cart
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this cart")
     # Kiểm tra sách tồn tại
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
@@ -2628,11 +2681,20 @@ async def add_to_cart(
     return {"message": "Added to cart successfully"}
 
 @app.put("/api/cart/{cart_item_id}")
-async def update_cart_item(cart_item_id: int, cart_data: CartItemUpdate, db: Session = Depends(get_db)):
+async def update_cart_item(
+    cart_item_id: int,
+    cart_data: CartItemUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật số lượng sản phẩm trong giỏ hàng"""
     cart_item = db.query(CartItem).filter(CartItem.id == cart_item_id).first()
     if not cart_item:
         raise HTTPException(status_code=404, detail="Cart item not found")
+    
+    # Check if user owns this cart item
+    if cart_item.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this cart item")
     
     # Check stock availability
     if cart_data.quantity > cart_item.book.stock_quantity:
@@ -2649,11 +2711,19 @@ async def update_cart_item(cart_item_id: int, cart_data: CartItemUpdate, db: Ses
         raise HTTPException(status_code=500, detail=f"Error updating cart item: {str(e)}")
 
 @app.delete("/api/cart/{cart_item_id}")
-async def remove_cart_item(cart_item_id: int, db: Session = Depends(get_db)):
+async def remove_cart_item(
+    cart_item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Xóa sản phẩm khỏi giỏ hàng"""
     cart_item = db.query(CartItem).filter(CartItem.id == cart_item_id).first()
     if not cart_item:
         raise HTTPException(status_code=404, detail="Cart item not found")
+    
+    # Check if user owns this cart item
+    if cart_item.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to remove this cart item")
     
     try:
         db.delete(cart_item)
@@ -2664,8 +2734,15 @@ async def remove_cart_item(cart_item_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error removing cart item: {str(e)}")
 
 @app.delete("/api/cart/user/{user_id}")
-async def clear_cart(user_id: int, db: Session = Depends(get_db)):
+async def clear_cart(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Xóa toàn bộ giỏ hàng của người dùng"""
+    # Users can only clear their own cart
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to clear this cart")
     cart_items = db.query(CartItem).filter(CartItem.user_id == user_id).all()
     
     try:
@@ -2677,9 +2754,7 @@ async def clear_cart(user_id: int, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error clearing cart: {str(e)}")
 
-# =====================================================
 # VOUCHER ENDPOINTS
-# =====================================================
 
 class CartItemInput(BaseModel):
     book_id: int
@@ -2765,6 +2840,7 @@ def _compute_voucher_for_cart(voucher: Voucher, user_id: int, cart_items: List[C
 @app.get("/api/vouchers")
 async def list_vouchers(user_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Danh sách voucher đang hoạt động (trong thời gian hiệu lực)"""
+    print(f" PUBLIC /api/vouchers endpoint called (no auth required)")
     now = datetime.utcnow()
     vouchers = db.query(Voucher).filter(
         Voucher.is_active == True,
@@ -2892,8 +2968,13 @@ class VoucherUpdateRequest(BaseModel):
     excluded_books: Optional[List[int]] = None
 
 @app.post("/api/admin/vouchers")
-async def create_voucher(voucher_data: VoucherCreateRequest, db: Session = Depends(get_db)):
+async def create_voucher(
+    voucher_data: VoucherCreateRequest,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Tạo voucher mới (Admin only)"""
+    print(f"➕ Create voucher endpoint called by user: {current_admin.username} (ID: {current_admin.id})")
     try:
         # Check if code exists
         existing = db.query(Voucher).filter(Voucher.code == voucher_data.code.upper()).first()
@@ -2940,7 +3021,12 @@ async def create_voucher(voucher_data: VoucherCreateRequest, db: Session = Depen
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo voucher: {str(e)}")
 
 @app.put("/api/admin/vouchers/{voucher_id}")
-async def update_voucher(voucher_id: int, voucher_data: VoucherUpdateRequest, db: Session = Depends(get_db)):
+async def update_voucher(
+    voucher_id: int,
+    voucher_data: VoucherUpdateRequest,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật voucher (Admin only)"""
     voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
     if not voucher:
@@ -2995,7 +3081,11 @@ async def update_voucher(voucher_id: int, voucher_data: VoucherUpdateRequest, db
         raise HTTPException(status_code=500, detail=f"Lỗi khi cập nhật voucher: {str(e)}")
 
 @app.delete("/api/admin/vouchers/{voucher_id}")
-async def delete_voucher(voucher_id: int, db: Session = Depends(get_db)):
+async def delete_voucher(
+    voucher_id: int,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Xóa voucher (Admin only)"""
     voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
     if not voucher:
@@ -3017,9 +3107,23 @@ async def delete_voucher(voucher_id: int, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi xóa voucher: {str(e)}")
 
+# Add a special handler for debugging authentication issues
+from fastapi import Request
+
 @app.get("/api/admin/vouchers")
-async def list_all_vouchers(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
-    """Lấy toàn bộ voucher (Admin only)"""
+async def list_all_vouchers(
+    request: Request,
+    skip: int = 0,
+    limit: int = 100,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    # Lấy toàn bộ voucher (Admin only)
+    print(f"Admin vouchers endpoint called by user: {current_admin.username} (ID: {current_admin.id})")
+    
+    auth_header = request.headers.get("Authorization", "No header")
+    print(f"Authorization header present: {'Yes' if auth_header != 'No header' else 'No'}")
+    
     vouchers = db.query(Voucher).order_by(Voucher.created_at.desc()).offset(skip).limit(limit).all()
     
     result = []
@@ -3054,8 +3158,15 @@ async def list_all_vouchers(skip: int = 0, limit: int = 100, db: Session = Depen
     return {"vouchers": result, "total": len(result)}
 
 @app.get("/api/wishlist/{user_id}")
-async def get_wishlist(user_id: int, db: Session = Depends(get_db)):
+async def get_wishlist(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Lấy danh sách yêu thích của người dùng"""
+    # Users can only view their own wishlist unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this wishlist")
     wishlist_items = db.query(WishlistItem).filter(WishlistItem.user_id == user_id).all()
     
     return {
@@ -3074,8 +3185,16 @@ async def get_wishlist(user_id: int, db: Session = Depends(get_db)):
     }
 
 @app.post("/api/wishlist")
-async def add_to_wishlist(wishlist_data: WishlistItemCreate, user_id: int, db: Session = Depends(get_db)):
+async def add_to_wishlist(
+    wishlist_data: WishlistItemCreate,
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Thêm sách vào danh sách yêu thích"""
+    # Users can only add to their own wishlist
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to modify this wishlist")
     # Check if book exists
     book = db.query(Book).filter(Book.id == wishlist_data.book_id).first()
     if not book:
@@ -3109,11 +3228,19 @@ async def add_to_wishlist(wishlist_data: WishlistItemCreate, user_id: int, db: S
         raise HTTPException(status_code=500, detail=f"Error adding to wishlist: {str(e)}")
 
 @app.delete("/api/wishlist/{wishlist_item_id}")
-async def remove_from_wishlist(wishlist_item_id: int, db: Session = Depends(get_db)):
+async def remove_from_wishlist(
+    wishlist_item_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Xóa sách khỏi danh sách yêu thích"""
     wishlist_item = db.query(WishlistItem).filter(WishlistItem.id == wishlist_item_id).first()
     if not wishlist_item:
         raise HTTPException(status_code=404, detail="Wishlist item not found")
+    
+    # Check if user owns this wishlist item
+    if wishlist_item.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not authorized to remove this item")
     
     try:
         db.delete(wishlist_item)
@@ -3128,8 +3255,15 @@ async def remove_from_wishlist(wishlist_item_id: int, db: Session = Depends(get_
 # =====================================================
 
 @app.get("/api/orders/{user_id}")
-async def get_user_orders(user_id: int, db: Session = Depends(get_db)):
+async def get_user_orders(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Lấy đơn hàng của người dùng"""
+    # Users can only view their own orders unless they're admin
+    if current_user.id != user_id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view these orders")
     try:
         orders = db.query(Order).options(
             joinedload(Order.order_items)
@@ -3156,8 +3290,15 @@ async def get_user_orders(user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
 
 @app.post("/api/orders")
-async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
+async def create_order(
+    order_data: OrderCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Tạo đơn hàng mới"""
+    # Users can only create orders for themselves
+    if current_user.id != order_data.user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to create order for another user")
     # Get user's cart items
     cart_items = db.query(CartItem).options(joinedload(CartItem.book)).filter(CartItem.user_id == order_data.user_id).all()
     if not cart_items:
@@ -3252,8 +3393,18 @@ async def create_order(order_data: OrderCreate, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
 
 @app.post("/api/orders/simple")
-async def create_simple_order(user_id: int, payment_method: str = "COD", notes: str = None, voucher_code: str = None, db: Session = Depends(get_db)):
+async def create_simple_order(
+    user_id: int,
+    payment_method: str = "COD",
+    notes: str = None,
+    voucher_code: str = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Tạo đơn hàng đơn giản từ giỏ hàng (không cần address_id, payment_method_id)"""
+    # Users can only create orders for themselves
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to create order for another user")
     try:
         # Get user's cart items
         cart_items = db.query(CartItem).options(joinedload(CartItem.book)).filter(CartItem.user_id == user_id).all()
@@ -3353,11 +3504,19 @@ async def create_simple_order(user_id: int, payment_method: str = "COD", notes: 
         raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
 
 @app.get("/api/orders/{order_id}/details")
-async def get_order_details(order_id: int, db: Session = Depends(get_db)):
+async def get_order_details(
+    order_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Lấy chi tiết đơn hàng"""
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Check if user owns this order or is admin
+    if order.user_id != current_user.id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to view this order")
     
     # Get order items with book information
     order_items = db.query(OrderItem).options(
@@ -3415,7 +3574,12 @@ async def get_order_details(order_id: int, db: Session = Depends(get_db)):
     }
 
 @app.put("/api/orders/{order_id}")
-async def update_order(order_id: int, order_data: OrderUpdate, db: Session = Depends(get_db)):
+async def update_order(
+    order_id: int,
+    order_data: OrderUpdate,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật trạng thái đơn hàng (Admin only)"""
     try:
         print(f"🔄 Backend: Updating order #{order_id}")
@@ -3459,23 +3623,32 @@ async def update_order(order_id: int, order_data: OrderUpdate, db: Session = Dep
         order.updated_at = datetime.utcnow()
         
         db.commit()
-        print(f"✅ Order #{order_id} updated successfully to: {order.status}")
+        print(f" Order #{order_id} updated successfully to: {order.status}")
         return {"message": "Order updated successfully", "order_id": order_id, "new_status": order.status}
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
-        print(f"❌ Error updating order #{order_id}: {str(e)}")
+        print(f" Error updating order #{order_id}: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error updating order: {str(e)}")
 
 @app.post("/api/orders/{order_id}/cancel")
-async def cancel_order(order_id: int, reason: str = None, db: Session = Depends(get_db)):
+async def cancel_order(
+    order_id: int,
+    reason: str = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """Hủy đơn hàng"""
     order = db.query(Order).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Check if user owns this order or is admin
+    if order.user_id != current_user.id and current_user.role.role_name != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized to cancel this order")
     
     # Check if order can be cancelled
     if order.status in ["delivered", "cancelled"]:
@@ -3522,7 +3695,13 @@ async def get_stats(db: Session = Depends(get_db)):
 # =====================================================
 
 @app.get("/api/admin/orders")
-async def get_all_orders(skip: int = 0, limit: int = 50, status: str = None, db: Session = Depends(get_db)):
+async def get_all_orders(
+    skip: int = 0,
+    limit: int = 50,
+    status: str = None,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Lấy tất cả đơn hàng (Admin only)"""
     try:
         query = db.query(Order).options(
@@ -3559,7 +3738,13 @@ async def get_all_orders(skip: int = 0, limit: int = 50, status: str = None, db:
         raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
 
 @app.get("/api/admin/users")
-async def get_all_users(skip: int = 0, limit: int = 50, role: str = None, db: Session = Depends(get_db)):
+async def get_all_users(
+    skip: int = 0,
+    limit: int = 50,
+    role: str = None,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Lấy tất cả người dùng (Admin only)"""
     query = db.query(User)
     
@@ -3586,7 +3771,12 @@ async def get_all_users(skip: int = 0, limit: int = 50, role: str = None, db: Se
     }
 
 @app.put("/api/admin/users/{user_id}/status")
-async def update_user_status(user_id: int, is_active: bool, db: Session = Depends(get_db)):
+async def update_user_status(
+    user_id: int,
+    is_active: bool,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Cập nhật trạng thái người dùng (Admin only)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
@@ -3603,7 +3793,13 @@ async def update_user_status(user_id: int, is_active: bool, db: Session = Depend
         raise HTTPException(status_code=500, detail=f"Error updating user status: {str(e)}")
 
 @app.get("/api/admin/books")
-async def get_all_books_admin(skip: int = 0, limit: int = 50, is_active: bool = None, db: Session = Depends(get_db)):
+async def get_all_books_admin(
+    skip: int = 0,
+    limit: int = 50,
+    is_active: bool = None,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Lấy tất cả sách (Admin only)"""
     query = db.query(Book)
     
@@ -3633,7 +3829,10 @@ async def get_all_books_admin(skip: int = 0, limit: int = 50, is_active: bool = 
     }
 
 @app.get("/api/admin/dashboard")
-async def get_admin_dashboard(db: Session = Depends(get_db)):
+async def get_admin_dashboard(
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
     """Lấy thống kê dashboard admin"""
     try:
         # Basic stats
@@ -3690,20 +3889,19 @@ async def get_admin_dashboard(db: Session = Depends(get_db)):
             ]
         }
     except Exception as e:
-        print(f"❌ Dashboard error: {str(e)}")
+        print(f" Dashboard error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Dashboard error: {str(e)}")
 
-# =====================================================
 # STATISTICS ENDPOINTS (ADMIN)
-# =====================================================
 
 @app.get("/api/admin/statistics/revenue")
 async def get_revenue_statistics(
     period: str = "day",  # day, month, year
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    current_admin: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
     """Thống kê doanh thu theo ngày/tháng/năm"""
@@ -3768,7 +3966,7 @@ async def get_revenue_statistics(
             "total_profit_after_discount": round(total_profit_after_discount, 2)  # Actual profit after voucher
         }
     except Exception as e:
-        print(f"❌ Revenue statistics error: {str(e)}")
+        print(f" Revenue statistics error: {str(e)}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error getting revenue statistics: {str(e)}")
@@ -3778,6 +3976,7 @@ async def get_book_statistics(
     period: str = "day",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    current_admin: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
     """Thống kê doanh thu theo sách"""
@@ -3856,6 +4055,7 @@ async def get_category_statistics(
     period: str = "day",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    current_admin: User = Depends(get_current_admin_user),
     db: Session = Depends(get_db)
 ):
     """Thống kê doanh thu theo thể loại"""
@@ -3953,9 +4153,7 @@ async def get_category_statistics(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error getting category statistics: {str(e)}")
 
-# =====================================================
 # SEARCH ENDPOINTS
-# =====================================================
 
 @app.get("/api/search/books")
 async def search_books(
@@ -3968,10 +4166,9 @@ async def search_books(
     limit: int = 20,
     db: Session = Depends(get_db)
 ):
-    """Tìm kiếm sách"""
+    #  Tìm kiếm sách
     query = db.query(Book).filter(Book.is_active == True)
-    
-    # Text search
+
     if q:
         query = query.filter(
             db.or_(
@@ -4013,6 +4210,8 @@ async def search_books(
                 "price": float(book.price),
                 "original_price": float(book.original_price) if book.original_price else None,
                 "discount_percentage": float(book.discount_percentage),
+                "stock_quantity": book.stock_quantity,
+                "sold_quantity": book.sold_quantity,
                 "rating_average": float(book.rating_average),
                 "rating_count": book.rating_count,
                 "category": book.category.name if book.category else None,
