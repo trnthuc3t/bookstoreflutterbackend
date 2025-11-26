@@ -123,6 +123,31 @@ class PasswordResetToken(Base):
         Index('idx_reset_token_user', 'user_id'),
     )
 
+class RefreshToken(Base):
+    __tablename__ = 'refresh_tokens'
+    
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    token_hash = Column(String(255), unique=True, nullable=False)  # Hash of the token for security
+    device_info = Column(String(200))  # Optional: track device/browser
+    ip_address = Column(INET)  # Optional: track IP address
+    expires_at = Column(DateTime, nullable=False)
+    is_revoked = Column(Boolean, default=False)
+    revoked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_used_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    user = relationship("User", foreign_keys=[user_id])
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_refresh_token_hash', 'token_hash'),
+        Index('idx_refresh_token_user', 'user_id'),
+        Index('idx_refresh_token_expires', 'expires_at'),
+        Index('idx_refresh_token_revoked', 'is_revoked'),
+    )
+
 # 2. QUẢN LÝ SẢN PHẨM SÁCH
 
 class Publisher(Base):

@@ -1475,10 +1475,17 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
             "slug": book.category.slug
         } if book.category else None,
         "category_id": book.category_id,
+        "category_name": book.category.name if book.category else None,
         "publisher": {
             "id": book.publisher.id,
             "name": book.publisher.name
         } if book.publisher else None,
+        "publisher_name": book.publisher.name if book.publisher else None,
+        "supplier": {
+            "id": book.supplier.id,
+            "name": book.supplier.name
+        } if book.supplier else None,
+        "supplier_name": book.supplier.name if book.supplier else None,
         "authors": authors,
         "images": images,
         "primary_image": primary_image,

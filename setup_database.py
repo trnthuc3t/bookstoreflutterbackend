@@ -78,7 +78,7 @@ def check_environment():
         logger.info("DB_PORT=5432")
         logger.info("DB_NAME=bookstore_online")
         logger.info("DB_USER=openpg")
-        logger.info("DB_PASSWORD=18102004")
+        logger.info("DB_PASSWORD=openpgpwd")
         return False
     
     logger.info("✅ Cấu hình environment OK!")

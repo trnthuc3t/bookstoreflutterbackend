@@ -19,7 +19,7 @@ DATABASE_CONFIG = {
     'port': os.getenv('DB_PORT', '5432'),
     'database': os.getenv('DB_NAME', 'bookstore_online'),
     'username': os.getenv('DB_USER', 'openpg'),
-    'password': os.getenv('DB_PASSWORD', '18102004')
+    'password': os.getenv('DB_PASSWORD', 'openpgpwd')
 }
 
 # Tạo connection string
