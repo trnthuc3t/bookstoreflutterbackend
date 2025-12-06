@@ -338,6 +338,49 @@ def refresh_access_token(refresh_token: str, db: Session) -> Dict[str, str]:
             detail="User not found or inactive"
         )
     
+    # Verify refresh token from refresh_tokens table
+    from models import RefreshToken
+    import hashlib
+    from datetime import datetime as dt
+    
+    # Hash the provided token
+    token_hash = hashlib.sha256(refresh_token.encode()).hexdigest()
+    
+    # Find the token in database
+    refresh_token_record = db.query(RefreshToken).filter(
+        RefreshToken.user_id == user_id,
+        RefreshToken.token_hash == token_hash,
+        RefreshToken.is_revoked == False
+    ).first()
+    
+    if not refresh_token_record:
+        print(f"❌ Refresh token not found in database for user {user.username}")
+        print(f"   Token hash: {token_hash[:20]}...")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid refresh token - not found or revoked"
+        )
+    
+    # Check if token has expired
+    if refresh_token_record.expires_at < dt.utcnow():
+        print(f"❌ Refresh token expired for user {user.username}")
+        print(f"   Expired at: {refresh_token_record.expires_at}")
+        refresh_token_record.is_revoked = True
+        refresh_token_record.revoked_at = dt.utcnow()
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Refresh token has expired"
+        )
+    
+    # Update last_used_at
+    refresh_token_record.last_used_at = dt.utcnow()
+    db.commit()
+    
+    print(f"✅ Refresh token verified from database for user: {user.username}")
+    print(f"   Token hash: {token_hash[:20]}...")
+    print(f"   Expires at: {refresh_token_record.expires_at}")
+    
     # Create new access token with updated user data
     user_data = {
         "sub": str(user.id),

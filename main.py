@@ -139,6 +139,7 @@ class LoginRequest(BaseModel):
 
 class LoginResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user: UserResponse
 
@@ -407,20 +408,49 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=401, detail="Tài khoản đã bị khóa")
     
-    # Update last login time
-    user.last_login = datetime.utcnow()
-    db.commit()
-    
     # Generate JWT tokens
     tokens = create_tokens_for_user(user)
+    
+    # Update last login time
+    user.last_login = datetime.utcnow()
+    
+    # Save refresh token to refresh_tokens table
+    from models import RefreshToken
+    import hashlib
+    from datetime import timedelta
+    
+    # Hash the token for security
+    token_hash = hashlib.sha256(tokens['refresh_token'].encode()).hexdigest()
+    
+    # Revoke old refresh tokens for this user
+    db.query(RefreshToken).filter(
+        RefreshToken.user_id == user.id,
+        RefreshToken.is_revoked == False
+    ).update({'is_revoked': True, 'revoked_at': datetime.utcnow()})
+    
+    # Create new refresh token record
+    refresh_token_record = RefreshToken(
+        user_id=user.id,
+        token_hash=token_hash,
+        expires_at=datetime.utcnow() + timedelta(days=7),  # 7 days expiry
+        is_revoked=False
+    )
+    db.add(refresh_token_record)
+    db.commit()
     
     # Get role name
     role_name = None
     if user.role:
         role_name = user.role.role_name
     
+    print(f"✅ Login successful for user: {user.username}")
+    print(f"✅ Access token (first 30 chars): {tokens['access_token'][:30]}...")
+    print(f"✅ Refresh token (first 30 chars): {tokens['refresh_token'][:30]}...")
+    print(f"✅ Refresh token saved to refresh_tokens table (hash: {token_hash[:20]}...)")
+    
     return LoginResponse(
         access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
         token_type=tokens["token_type"],
         user=UserResponse(
             id=user.id,
@@ -439,11 +469,24 @@ async def login_user(login_data: LoginRequest, db: Session = Depends(get_db)):
 async def refresh_token(refresh_token: str, db: Session = Depends(get_db)):
     """Refresh access token using refresh token"""
     try:
+        print(f"🔄 ========== REFRESH TOKEN REQUEST ==========")
+        print(f"🔄 Refresh token (first 30 chars): {refresh_token[:30]}...")
+        print(f"🔄 Refresh token length: {len(refresh_token)}")
+        
         result = refresh_access_token(refresh_token, db)
+        
+        print(f"✅ Refresh token successful!")
+        print(f"✅ New access token (first 30 chars): {result.get('access_token', '')[:30]}...")
+        print(f"🔄 ========== REFRESH COMPLETE ==========")
+        
         return result
     except HTTPException as e:
+        print(f"❌ HTTPException during refresh: {e.detail}")
         raise e
     except Exception as e:
+        print(f"❌ Exception during refresh: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=401, detail="Invalid refresh token")
 
 @app.get("/api/auth/check-username/{username}")
@@ -3369,9 +3412,9 @@ async def create_order(
             cart_item.book.stock_quantity -= cart_item.quantity
             cart_item.book.sold_quantity = (cart_item.book.sold_quantity or 0) + cart_item.quantity
         
-        # Clear cart
-        for cart_item in cart_items:
-            db.delete(cart_item)
+        # DON'T clear cart here - only clear when payment is confirmed
+        # User might cancel payment, so keep cart items until payment success
+        # Cart will be cleared when order status changes to 'confirmed' or 'paid'
 
         # Record voucher usage
         if applied_voucher is not None:
@@ -3510,6 +3553,103 @@ async def create_simple_order(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
 
+@app.post("/api/chatbot/order")
+async def create_chatbot_order(
+    user_id: int,
+    book_id: int,
+    quantity: int = 1,
+    db: Session = Depends(get_db)
+):
+    """
+    Tạo đơn hàng từ chatbot - KHÔNG CẦN AUTH
+    Endpoint đặc biệt cho chatbot AI
+    """
+    try:
+        print(f"🤖 ========== CHATBOT ORDER ==========")
+        print(f"👤 User ID: {user_id}")
+        print(f"📚 Book ID: {book_id}, Quantity: {quantity}")
+        
+        # Verify user exists
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Verify book exists and has stock
+        book = db.query(Book).filter(Book.id == book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        if book.stock_quantity < quantity:
+            raise HTTPException(status_code=400, detail=f"Not enough stock. Available: {book.stock_quantity}")
+        
+        # Calculate totals
+        unit_price = float(book.price)
+        subtotal = unit_price * quantity
+        shipping_fee = 0.0
+        total_amount = subtotal + shipping_fee
+        
+        # Generate order number
+        order_number = generate_order_number()
+        
+        # Create order
+        new_order = Order(
+            order_number=order_number,
+            user_id=user_id,
+            status="pending",
+            subtotal=subtotal,
+            shipping_fee=shipping_fee,
+            discount_amount=0,
+            total_amount=total_amount,
+            payment_method_id=None,
+            payment_status="pending",
+            voucher_id=None,
+            shipping_address_id=None,
+            notes=f"Đơn hàng từ Chatbot AI"
+        )
+        
+        db.add(new_order)
+        db.flush()
+        
+        # Create order item
+        order_item = OrderItem(
+            order_id=new_order.id,
+            book_id=book_id,
+            quantity=quantity,
+            unit_price=unit_price,
+            total_price=subtotal
+        )
+        db.add(order_item)
+        
+        # Update book stock
+        book.stock_quantity -= quantity
+        book.sold_quantity = (book.sold_quantity or 0) + quantity
+        
+        db.commit()
+        db.refresh(new_order)
+        
+        print(f"✅ Chatbot order created: #{new_order.order_number}")
+        
+        return {
+            "success": True,
+            "id": new_order.id,
+            "order_number": new_order.order_number,
+            "total_amount": float(new_order.total_amount),
+            "status": new_order.status,
+            "payment_status": new_order.payment_status,
+            "book_title": book.title,
+            "quantity": quantity,
+            "created_at": new_order.created_at.isoformat() if new_order.created_at else None,
+            "message": "Order created successfully via chatbot"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"❌ Chatbot order error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
+
 @app.get("/api/orders/{order_id}/details")
 async def get_order_details(
     order_id: int,
@@ -3617,9 +3757,38 @@ async def update_order(
                     print(f"💳 Auto-updating payment status: {old_payment_status} → paid (order delivered)")
             elif order_data.status == "cancelled":
                 order.cancelled_at = datetime.utcnow()
+            
+            # Clear cart when order is confirmed or paid
+            if order_data.status in ["confirmed", "processing", "shipped"]:
+                cart_items = db.query(CartItem).filter(CartItem.user_id == order.user_id).all()
+                if cart_items:
+                    for cart_item in cart_items:
+                        # Only delete items that are in this order
+                        order_item_exists = any(
+                            oi.book_id == cart_item.book_id 
+                            for oi in order.order_items
+                        )
+                        if order_item_exists:
+                            db.delete(cart_item)
+                    print(f"🗑️ Cleared cart items for user {order.user_id} after order confirmation")
         
         if order_data.payment_status is not None:
+            old_payment_status = order.payment_status
             order.payment_status = order_data.payment_status
+            
+            # Also clear cart when payment is confirmed
+            if order_data.payment_status == "paid" and old_payment_status != "paid":
+                cart_items = db.query(CartItem).filter(CartItem.user_id == order.user_id).all()
+                if cart_items:
+                    for cart_item in cart_items:
+                        # Only delete items that are in this order
+                        order_item_exists = any(
+                            oi.book_id == cart_item.book_id 
+                            for oi in order.order_items
+                        )
+                        if order_item_exists:
+                            db.delete(cart_item)
+                    print(f"🗑️ Cleared cart items for user {order.user_id} after payment confirmation")
         
         if order_data.tracking_number is not None:
             order.tracking_number = order_data.tracking_number
