@@ -22,7 +22,7 @@ import shutil
 
 load_dotenv()
 
-BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-7000.asse.devtunnels.ms')
+BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-8000.asse.devtunnels.ms')
 print(f"Using BASE_URL: {BASE_URL}")
 
 from database import get_db, engine, Base
@@ -34,6 +34,7 @@ from jwt_utils import (
     get_current_user,
     get_current_active_user,
     get_current_admin_user,
+    get_current_admin_or_staff_user,
     refresh_access_token
 )
 
@@ -759,7 +760,7 @@ async def forgot_password(email: str, db: Session = Depends(get_db)):
 
 @app.get("/api/auth/reset-password-page", response_class=HTMLResponse)
 async def reset_password_page(token: str, db: Session = Depends(get_db)):
-    """Hiển thị form reset password - Trả về HTML cho browser"""
+    """Redirect to Flutter app with reset token"""
     
     # Tìm token
     reset_token = db.query(PasswordResetToken).filter(
@@ -785,9 +786,9 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="container">
-                <div class="icon"></div>
+                <div class="icon">❌</div>
                 <h1>Token không hợp lệ</h1>
-                <p>Token không hợp lệ hoặc đã được sử dụng. Vui lòng yêu cầu đặt lại mật khẩu lại.</p>
+                <p>Token không hợp lệ hoặc đã được sử dụng. Vui lòng yêu cầu đặt lại mật khẩu lại trong ứng dụng.</p>
             </div>
         </body>
         </html>
@@ -814,7 +815,7 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
             <div class="container">
                 <div class="icon">⏰</div>
                 <h1>Token đã hết hạn</h1>
-                <p>Link đặt lại mật khẩu đã hết hạn sau 1 giờ. Vui lòng yêu cầu đặt lại mật khẩu lại.</p>
+                <p>Link đặt lại mật khẩu đã hết hạn sau 1 giờ. Vui lòng yêu cầu đặt lại mật khẩu lại trong ứng dụng.</p>
             </div>
         </body>
         </html>
@@ -840,7 +841,7 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="container">
-                <div class="icon"></div>
+                <div class="icon">❌</div>
                 <h1>Lỗi</h1>
                 <p>Người dùng không tồn tại.</p>
             </div>
@@ -848,7 +849,7 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
         </html>
         """, status_code=404)
     
-    # Hiển thị form đặt lại mật khẩu
+    # Hiển thị form đặt lại mật khẩu trên web (cho trường hợp mở từ browser)
     return HTMLResponse(content=f"""
     <!DOCTYPE html>
     <html>
@@ -874,11 +875,11 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
     </head>
     <body>
         <div class="container">
-            <div class="icon"></div>
+            <div class="icon">🔐</div>
             <h1>Đặt lại mật khẩu</h1>
             <p>Xin chào <strong>{user.username}</strong>, vui lòng nhập mật khẩu mới</p>
             <div class="info">
-                <small> Mật khẩu phải có ít nhất 6 ký tự</small>
+                <small>💡 Mật khẩu phải có ít nhất 6 ký tự</small>
             </div>
             <form id="resetForm">
                 <div class="form-group">
@@ -901,12 +902,12 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
                 const messageDiv = document.getElementById('message');
                 
                 if (password !== confirmPassword) {{
-                    messageDiv.innerHTML = '<p class="error">Mật khẩu xác nhận không khớp!</p>';
+                    messageDiv.innerHTML = '<p class="error">❌ Mật khẩu xác nhận không khớp!</p>';
                     return;
                 }}
                 
                 if (password.length < 6) {{
-                    messageDiv.innerHTML = '<p class="error">Mật khẩu phải có ít nhất 6 ký tự!</p>';
+                    messageDiv.innerHTML = '<p class="error">❌ Mật khẩu phải có ít nhất 6 ký tự!</p>';
                     return;
                 }}
                 
@@ -923,13 +924,13 @@ async def reset_password_page(token: str, db: Session = Depends(get_db)):
                     const data = await response.json();
                     
                     if (response.ok) {{
-                        messageDiv.innerHTML = '<p class="success">' + data.message + '</p>';
-                        document.getElementById('resetForm').innerHTML = '<p class="success">Đặt lại mật khẩu thành công! Bạn có thể đăng nhập ngay bây giờ.</p>';
+                        messageDiv.innerHTML = '<p class="success">✅ ' + data.message + '</p>';
+                        document.getElementById('resetForm').innerHTML = '<p class="success">✅ Đặt lại mật khẩu thành công! Bạn có thể đăng nhập trong ứng dụng ngay bây giờ.</p>';
                     }} else {{
-                        messageDiv.innerHTML = '<p class="error"> ' + data.detail + '</p>';
+                        messageDiv.innerHTML = '<p class="error">❌ ' + data.detail + '</p>';
                     }}
                 }} catch (error) {{
-                    messageDiv.innerHTML = '<p class="error"> Lỗi kết nối server</p>';
+                    messageDiv.innerHTML = '<p class="error">❌ Lỗi kết nối server</p>';
                 }}
             }});
         </script>
@@ -1733,7 +1734,7 @@ async def upload_multiple_book_images(
 @app.post("/api/books")
 async def create_book(
     book_data: BookCreate,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Tạo sách mới (Admin only)"""
@@ -1944,7 +1945,7 @@ async def create_book_with_image(
 async def update_book(
     book_id: int,
     book_data: BookUpdate,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Cập nhật thông tin sách (Admin only)"""
@@ -2048,7 +2049,7 @@ async def update_book(
 @app.delete("/api/books/{book_id}")
 async def delete_book(
     book_id: int,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Xóa sách (Admin only)"""
@@ -2071,7 +2072,7 @@ async def delete_book(
 @app.patch("/api/admin/books/{book_id}/toggle-featured")
 async def toggle_book_featured(
     book_id: int,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Toggle trạng thái nổi bật của sách"""
@@ -2096,7 +2097,7 @@ async def toggle_book_featured(
 @app.patch("/api/admin/books/{book_id}/toggle-bestseller")
 async def toggle_book_bestseller(
     book_id: int,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Toggle trạng thái bestseller của sách"""
@@ -3020,7 +3021,7 @@ class VoucherUpdateRequest(BaseModel):
 @app.post("/api/admin/vouchers")
 async def create_voucher(
     voucher_data: VoucherCreateRequest,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Tạo voucher mới (Admin only)"""
@@ -3074,7 +3075,7 @@ async def create_voucher(
 async def update_voucher(
     voucher_id: int,
     voucher_data: VoucherUpdateRequest,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Cập nhật voucher (Admin only)"""
@@ -3133,7 +3134,7 @@ async def update_voucher(
 @app.delete("/api/admin/vouchers/{voucher_id}")
 async def delete_voucher(
     voucher_id: int,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Xóa voucher (Admin only)"""
@@ -3165,10 +3166,10 @@ async def list_all_vouchers(
     request: Request,
     skip: int = 0,
     limit: int = 100,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
-    # Lấy toàn bộ voucher (Admin only)
+    # Lấy toàn bộ voucher (Admin/Staff)
     print(f"Admin vouchers endpoint called by user: {current_admin.username} (ID: {current_admin.id})")
     
     auth_header = request.headers.get("Authorization", "No header")
@@ -3724,7 +3725,7 @@ async def get_order_details(
 async def update_order(
     order_id: int,
     order_data: OrderUpdate,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Cập nhật trạng thái đơn hàng (Admin only)"""
@@ -3875,10 +3876,10 @@ async def get_all_orders(
     skip: int = 0,
     limit: int = 50,
     status: str = None,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
-    """Lấy tất cả đơn hàng (Admin only)"""
+    """Lấy tất cả đơn hàng (Admin/Staff)"""
     try:
         query = db.query(Order).options(
             joinedload(Order.user),
@@ -3918,7 +3919,7 @@ async def get_all_users(
     skip: int = 0,
     limit: int = 50,
     role: str = None,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Lấy tất cả người dùng (Admin only)"""
@@ -3938,6 +3939,7 @@ async def get_all_users(
                 "first_name": user.first_name,
                 "last_name": user.last_name,
                 "role": user.role.role_name if user.role else None,
+                "role_id": user.role_id,
                 "is_active": user.is_active,
                 "created_at": user.created_at.isoformat() if user.created_at else None
             }
@@ -3950,13 +3952,21 @@ async def get_all_users(
 async def update_user_status(
     user_id: int,
     is_active: bool,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
-    """Cập nhật trạng thái người dùng (Admin only)"""
+    """Cập nhật trạng thái người dùng (Admin/Staff)"""
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    # Staff không được vô hiệu hóa admin hoặc staff khác
+    if current_admin.role_id == 2:  # Current user is staff
+        if user.role_id in [1, 2]:  # Target is admin or staff
+            raise HTTPException(
+                status_code=403, 
+                detail="Staff không được vô hiệu hóa tài khoản Admin hoặc Staff khác"
+            )
     
     user.is_active = is_active
     user.updated_at = datetime.utcnow()
@@ -3968,12 +3978,47 @@ async def update_user_status(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Error updating user status: {str(e)}")
 
+@app.put("/api/admin/users/{user_id}/staff-role")
+async def toggle_staff_role(
+    user_id: int,
+    is_staff: bool,
+    current_admin: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Bật/tắt quyền staff cho người dùng (Admin only)"""
+    # Check if current user is admin (not staff)
+    if current_admin.role_id != 1:
+        raise HTTPException(status_code=403, detail="Only admin can manage staff roles")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Không cho phép thay đổi role của admin
+    if user.role_id == 1:
+        raise HTTPException(status_code=400, detail="Cannot change admin role")
+    
+    # Toggle staff role: role_id 2 = staff, role_id 3 = customer
+    user.role_id = 2 if is_staff else 3
+    user.updated_at = datetime.utcnow()
+    
+    try:
+        db.commit()
+        return {
+            "message": f"User {'promoted to staff' if is_staff else 'demoted to customer'} successfully",
+            "role_id": user.role_id,
+            "role_name": "staff" if is_staff else "customer"
+        }
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error updating user role: {str(e)}")
+
 @app.get("/api/admin/books")
 async def get_all_books_admin(
     skip: int = 0,
     limit: int = 50,
     is_active: bool = None,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(get_current_admin_or_staff_user),
     db: Session = Depends(get_db)
 ):
     """Lấy tất cả sách (Admin only)"""

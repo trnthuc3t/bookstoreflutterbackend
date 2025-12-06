@@ -267,6 +267,45 @@ def get_current_admin_user(
     return current_user
 
 
+def get_current_admin_or_staff_user(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """
+    Dependency to verify current user is admin or staff
+    
+    Args:
+        current_user: Current authenticated user from get_current_user
+    
+    Returns:
+        Current admin or staff User object
+    
+    Raises:
+        HTTPException: If user is not an admin or staff
+    """
+    # Debug logging
+    print(f"🔍 Admin/Staff check for user: {current_user.username} (ID: {current_user.id})")
+    print(f"   User role: {current_user.role.role_name if current_user.role else 'No role'}")
+    print(f"   User role_id: {current_user.role_id}")
+    
+    if not current_user.role:
+        print(f"   ❌ User has no role assigned")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions. Admin/Staff access required. (No role assigned)"
+        )
+    
+    # Allow both admin (role_id=1) and staff (role_id=2)
+    if current_user.role_id not in [1, 2]:
+        print(f"   ❌ User role '{current_user.role.role_name}' is not admin or staff")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Not enough permissions. Admin/Staff access required. (Current role: {current_user.role.role_name})"
+        )
+    
+    print(f"   ✅ Admin/Staff access granted")
+    return current_user
+
+
 def create_tokens_for_user(user: User) -> Dict[str, str]:
     """
     Create both access and refresh tokens for a user
