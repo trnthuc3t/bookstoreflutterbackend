@@ -227,6 +227,7 @@ class Book(Base):
     weight = Column(Integer)  # Weight in grams
     
     price = Column(Decimal(10, 2), nullable=False)
+    cost_price = Column(Decimal(10, 2))
     original_price = Column(Decimal(10, 2))
     discount_percentage = Column(Decimal(5, 2), default=0)
     stock_quantity = Column(Integer, default=0)

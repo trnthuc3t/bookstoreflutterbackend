@@ -1499,7 +1499,7 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "isbn": book.isbn,
         "description": book.description,
         "price": float(book.price),
-        "cost_price": float(book.cost_price) if book.cost_price else None,
+        "cost_price": float(getattr(book, 'cost_price', None)) if getattr(book, 'cost_price', None) else None,
         "original_price": float(book.original_price) if book.original_price else None,
         "discount_percentage": float(book.discount_percentage),
         "stock_quantity": book.stock_quantity,
@@ -1973,7 +1973,7 @@ async def update_book(
     
     # Update cost_price if provided
     if book_data.cost_price is not None:
-        book.cost_price = book_data.cost_price
+        setattr(book, 'cost_price', book_data.cost_price)
         print(f"💰 Cost price updated: {book.cost_price}")
     
     # Handle price and discount logic
@@ -4075,7 +4075,7 @@ async def get_all_books_admin(
                 "id": book.id,
                 "title": book.title,
                 "price": float(book.price),
-                "cost_price": float(book.cost_price) if book.cost_price else None,
+                "cost_price": float(getattr(book, 'cost_price', None)) if getattr(book, 'cost_price', None) else None,
                 "stock_quantity": book.stock_quantity,
                 "sold_quantity": book.sold_quantity,
                 "is_active": book.is_active,
@@ -4207,7 +4207,7 @@ async def get_revenue_statistics(
                 book = item.book
                 if book:
                     # Profit per item = (selling price - cost price) * quantity
-                    cost_price = float(book.cost_price) if book.cost_price else 0
+                    cost_price = float(getattr(book, 'cost_price', None)) if getattr(book, 'cost_price', None) else 0
                     selling_price = float(item.unit_price)
                     profit_per_item = (selling_price - cost_price) * item.quantity
                     total_profit += profit_per_item
