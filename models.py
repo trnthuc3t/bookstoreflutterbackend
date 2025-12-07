@@ -254,6 +254,7 @@ class Book(Base):
     cart_items = relationship("CartItem", back_populates="book", cascade="all, delete-orphan")
     wishlist_items = relationship("WishlistItem", back_populates="book", cascade="all, delete-orphan")
     order_items = relationship("OrderItem", back_populates="book")
+    book_history = relationship("BookHistory", back_populates="book", cascade="all, delete-orphan")
     
     # Indexes and Constraints
     __table_args__ = (
@@ -421,6 +422,7 @@ class Voucher(Base):
     creator = relationship("User")
     voucher_usages = relationship("VoucherUsage", back_populates="voucher", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="voucher")
+    voucher_history = relationship("VoucherHistory", back_populates="voucher", cascade="all, delete-orphan")
     
     # Constraints
     __table_args__ = (
@@ -538,6 +540,52 @@ class OrderHistory(Base):
     # Relationships
     order = relationship("Order", back_populates="order_history")
     creator = relationship("User")
+
+class BookHistory(Base):
+    __tablename__ = 'book_history'
+    
+    id = Column(Integer, primary_key=True)
+    book_id = Column(Integer, ForeignKey('books.id', ondelete='CASCADE'), nullable=False)
+    field_name = Column(String(50), nullable=False)  # Tên trường thay đổi: price, cost_price, description, length, width, etc.
+    old_value = Column(Text)  # Giá trị cũ (JSON string để lưu nhiều loại dữ liệu)
+    new_value = Column(Text)  # Giá trị mới
+    notes = Column(Text)  # Ghi chú về thay đổi
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    book = relationship("Book", back_populates="book_history")
+    creator = relationship("User")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_book_history_book', 'book_id'),
+        Index('idx_book_history_created', 'created_at'),
+        Index('idx_book_history_creator', 'created_by'),
+    )
+
+class VoucherHistory(Base):
+    __tablename__ = 'voucher_history'
+    
+    id = Column(Integer, primary_key=True)
+    voucher_id = Column(Integer, ForeignKey('vouchers.id', ondelete='CASCADE'), nullable=False)
+    field_name = Column(String(50), nullable=False)  # Tên trường thay đổi: discount_value, min_order_amount, etc.
+    old_value = Column(Text)  # Giá trị cũ
+    new_value = Column(Text)  # Giá trị mới
+    notes = Column(Text)  # Ghi chú về thay đổi
+    created_by = Column(Integer, ForeignKey('users.id'), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Relationships
+    voucher = relationship("Voucher", back_populates="voucher_history")
+    creator = relationship("User")
+    
+    # Indexes
+    __table_args__ = (
+        Index('idx_voucher_history_voucher', 'voucher_id'),
+        Index('idx_voucher_history_created', 'created_at'),
+        Index('idx_voucher_history_creator', 'created_by'),
+    )
 
 # HOÀN THÀNH CÁC MODELS
 

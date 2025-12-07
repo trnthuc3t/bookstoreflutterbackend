@@ -22,7 +22,7 @@ import shutil
 
 load_dotenv()
 
-BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-8000.asse.devtunnels.ms')
+BASE_URL = os.getenv('BASE_URL', 'https://xrjssx4r-7000.asse.devtunnels.ms')
 print(f"Using BASE_URL: {BASE_URL}")
 
 from database import get_db, engine, Base
@@ -70,10 +70,12 @@ async def startup_event():
     # Auto-create tables
     try:
         Base.metadata.create_all(bind=engine)
-        print("Database tables checked/created")
+        print("✅ Database tables checked/created")
     except Exception as e:
-        print(f"Warning: Could not create tables: {e}")
-        print("Tip: Run: python setup_database.py to setup database")
+        print(f"⚠️ Warning: Could not create tables: {e}")
+        print("💡 Tip: Run migration script or: python setup_database.py to setup database")
+        import traceback
+        traceback.print_exc()
     
     print("API Documentation available at /docs")
 
@@ -1946,6 +1948,64 @@ async def create_book_with_image(
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Lỗi khi tạo sách: {str(e)}")
 
+def _record_book_history(
+    db: Session,
+    book_id: int,
+    field_name: str,
+    old_value: any,
+    new_value: any,
+    created_by: int,
+    notes: str = None
+):
+    """Helper function để ghi lại lịch sử thay đổi sản phẩm"""
+    try:
+        # Convert values to string for storage
+        old_val_str = str(old_value) if old_value is not None else None
+        new_val_str = str(new_value) if new_value is not None else None
+        
+        history = BookHistory(
+            book_id=book_id,
+            field_name=field_name,
+            old_value=old_val_str,
+            new_value=new_val_str,
+            notes=notes,
+            created_by=created_by
+        )
+        db.add(history)
+        print(f"📝 Book history recorded: {field_name} changed by user {created_by}")
+    except Exception as e:
+        print(f"❌ Error recording book history: {e}")
+        # Không throw exception để không ảnh hưởng đến việc update
+
+def _record_voucher_history(
+    db: Session,
+    voucher_id: int,
+    field_name: str,
+    old_value: any,
+    new_value: any,
+    created_by: int,
+    notes: str = None
+):
+    """Helper function để ghi lại lịch sử thay đổi voucher"""
+    try:
+        # Convert values to string for storage
+        old_val_str = str(old_value) if old_value is not None else None
+        new_val_str = str(new_value) if new_value is not None else None
+        
+        history = VoucherHistory(
+            voucher_id=voucher_id,
+            field_name=field_name,
+            old_value=old_val_str,
+            new_value=new_val_str,
+            notes=notes,
+            created_by=created_by
+        )
+        db.add(history)
+        print(f"📝 Voucher history recorded: {field_name} changed by user {created_by}")
+    except Exception as e:
+        print(f"❌ Error recording voucher history: {e}")
+        # Không throw exception để không ảnh hưởng đến việc update
+
 @app.put("/api/books/{book_id}")
 async def update_book(
     book_id: int,
@@ -1958,87 +2018,234 @@ async def update_book(
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     
-    # Update fields
-    if book_data.title is not None:
+    user_role = current_admin.role.role_name if current_admin.role else "unknown"
+    
+    # Update fields và ghi lại lịch sử
+    if book_data.title is not None and book_data.title != book.title:
+        old_title = book.title
         book.title = book_data.title
         # Update slug if title changed
         slug = book_data.title.lower().replace(" ", "-").replace("_", "-")
         slug = re.sub(r'[^a-z0-9\-]', '', slug)
         book.slug = slug
+        _record_book_history(
+            db, book_id, "title", old_title, book_data.title,
+            current_admin.id, f"Thay đổi tiêu đề bởi {user_role} ({current_admin.username})"
+        )
     
-    if book_data.subtitle is not None:
+    if book_data.subtitle is not None and book_data.subtitle != book.subtitle:
+        old_subtitle = book.subtitle
         book.subtitle = book_data.subtitle
-    if book_data.description is not None:
+        _record_book_history(
+            db, book_id, "subtitle", old_subtitle, book_data.subtitle,
+            current_admin.id, f"Thay đổi phụ đề bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.description is not None and book_data.description != book.description:
+        old_description = book.description
         book.description = book_data.description
+        _record_book_history(
+            db, book_id, "description", old_description, book_data.description,
+            current_admin.id, f"Thay đổi mô tả bởi {user_role} ({current_admin.username})"
+        )
     
     # Update cost_price if provided
     if book_data.cost_price is not None:
-        setattr(book, 'cost_price', book_data.cost_price)
-        print(f"💰 Cost price updated: {book.cost_price}")
+        old_cost_price = getattr(book, 'cost_price', None)
+        if old_cost_price != book_data.cost_price:
+            setattr(book, 'cost_price', book_data.cost_price)
+            print(f"💰 Cost price updated: {old_cost_price} -> {book.cost_price}")
+            _record_book_history(
+                db, book_id, "cost_price", old_cost_price, book_data.cost_price,
+                current_admin.id, f"Thay đổi giá nhập bởi {user_role} ({current_admin.username})"
+            )
     
     # Handle price and discount logic
     # First, update original_price if provided
-    if book_data.original_price is not None:
+    if book_data.original_price is not None and book_data.original_price != book.original_price:
+        old_original_price = book.original_price
         book.original_price = book_data.original_price
+        _record_book_history(
+            db, book_id, "original_price", old_original_price, book_data.original_price,
+            current_admin.id, f"Thay đổi giá gốc bởi {user_role} ({current_admin.username})"
+        )
     
     # Then handle discount or price update
     if book_data.discount_percentage is not None:
         # If discount_percentage is provided, calculate price from original_price
+        old_discount = book.discount_percentage
         book.discount_percentage = book_data.discount_percentage
         if book.original_price and book.original_price > 0:
             # Convert to float to avoid Decimal * float TypeError
+            old_price = book.price
             book.price = float(book.original_price) * (1 - float(book.discount_percentage) / 100)
             print(f"💰 Calculated price from discount: {book.original_price} * (1 - {book.discount_percentage}/100) = {book.price}")
+            if old_discount != book_data.discount_percentage:
+                _record_book_history(
+                    db, book_id, "discount_percentage", old_discount, book_data.discount_percentage,
+                    current_admin.id, f"Thay đổi phần trăm giảm giá bởi {user_role} ({current_admin.username})"
+                )
+            if old_price != book.price:
+                _record_book_history(
+                    db, book_id, "price", old_price, book.price,
+                    current_admin.id, f"Giá tự động tính lại từ giảm giá bởi {user_role} ({current_admin.username})"
+                )
         else:
             print(f"⚠️ Cannot calculate price: original_price is {book.original_price}")
     elif book_data.price is not None:
         # If price is provided directly
         old_price = book.price
-        book.price = book_data.price
-        print(f"💰 Price updated: {old_price} -> {book.price}")
-        
-        # Recalculate discount percentage if we have original_price
-        if book.original_price and book.original_price > 0:
-            if book.price < book.original_price:
-                # Convert to float to avoid Decimal arithmetic issues
-                book.discount_percentage = ((float(book.original_price) - float(book.price)) / float(book.original_price)) * 100
-                print(f"📊 Calculated discount: {book.discount_percentage}%")
-            else:
-                book.discount_percentage = 0
-                print(f"📊 No discount (price >= original_price)")
+        if old_price != book_data.price:
+            book.price = book_data.price
+            print(f"💰 Price updated: {old_price} -> {book.price}")
+            _record_book_history(
+                db, book_id, "price", old_price, book_data.price,
+                current_admin.id, f"Thay đổi giá bán bởi {user_role} ({current_admin.username})"
+            )
+            
+            # Recalculate discount percentage if we have original_price
+            if book.original_price and book.original_price > 0:
+                if book.price < book.original_price:
+                    # Convert to float to avoid Decimal arithmetic issues
+                    old_discount = book.discount_percentage
+                    book.discount_percentage = ((float(book.original_price) - float(book.price)) / float(book.original_price)) * 100
+                    print(f"📊 Calculated discount: {book.discount_percentage}%")
+                    if old_discount != book.discount_percentage:
+                        _record_book_history(
+                            db, book_id, "discount_percentage", old_discount, book.discount_percentage,
+                            current_admin.id, f"Phần trăm giảm giá tự động tính lại bởi {user_role} ({current_admin.username})"
+                        )
+                else:
+                    old_discount = book.discount_percentage
+                    book.discount_percentage = 0
+                    print(f"📊 No discount (price >= original_price)")
+                    if old_discount != 0:
+                        _record_book_history(
+                            db, book_id, "discount_percentage", old_discount, 0,
+                            current_admin.id, f"Xóa giảm giá (giá >= giá gốc) bởi {user_role} ({current_admin.username})"
+                        )
     
-    if book_data.stock_quantity is not None:
+    if book_data.stock_quantity is not None and book_data.stock_quantity != book.stock_quantity:
+        old_stock = book.stock_quantity
         book.stock_quantity = book_data.stock_quantity
-    if book_data.is_active is not None:
+        _record_book_history(
+            db, book_id, "stock_quantity", old_stock, book_data.stock_quantity,
+            current_admin.id, f"Thay đổi tồn kho bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.is_active is not None and book_data.is_active != book.is_active:
+        old_active = book.is_active
         book.is_active = book_data.is_active
-    if book_data.is_featured is not None:
+        _record_book_history(
+            db, book_id, "is_active", old_active, book_data.is_active,
+            current_admin.id, f"Thay đổi trạng thái bán hàng bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.is_featured is not None and book_data.is_featured != book.is_featured:
+        old_featured = book.is_featured
         book.is_featured = book_data.is_featured
-    if book_data.is_bestseller is not None:
+        _record_book_history(
+            db, book_id, "is_featured", old_featured, book_data.is_featured,
+            current_admin.id, f"Thay đổi trạng thái nổi bật bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.is_bestseller is not None and book_data.is_bestseller != book.is_bestseller:
+        old_bestseller = book.is_bestseller
         book.is_bestseller = book_data.is_bestseller
+        _record_book_history(
+            db, book_id, "is_bestseller", old_bestseller, book_data.is_bestseller,
+            current_admin.id, f"Thay đổi trạng thái bán chạy bởi {user_role} ({current_admin.username})"
+        )
     
     # Update additional fields
-    if book_data.category_id is not None:
+    if book_data.category_id is not None and book_data.category_id != book.category_id:
+        old_category = book.category_id
         book.category_id = book_data.category_id
-    if book_data.publisher_id is not None:
+        _record_book_history(
+            db, book_id, "category_id", old_category, book_data.category_id,
+            current_admin.id, f"Thay đổi danh mục bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.publisher_id is not None and book_data.publisher_id != book.publisher_id:
+        old_publisher = book.publisher_id
         book.publisher_id = book_data.publisher_id
-    if book_data.supplier_id is not None:
+        _record_book_history(
+            db, book_id, "publisher_id", old_publisher, book_data.publisher_id,
+            current_admin.id, f"Thay đổi nhà xuất bản bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.supplier_id is not None and book_data.supplier_id != book.supplier_id:
+        old_supplier = book.supplier_id
         book.supplier_id = book_data.supplier_id
-    if book_data.language is not None:
+        _record_book_history(
+            db, book_id, "supplier_id", old_supplier, book_data.supplier_id,
+            current_admin.id, f"Thay đổi nhà cung cấp bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.language is not None and book_data.language != book.language:
+        old_language = book.language
         book.language = book_data.language
-    if book_data.cover_type is not None:
+        _record_book_history(
+            db, book_id, "language", old_language, book_data.language,
+            current_admin.id, f"Thay đổi ngôn ngữ bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.cover_type is not None and book_data.cover_type != book.cover_type:
+        old_cover = book.cover_type
         book.cover_type = book_data.cover_type
-    if book_data.pages is not None:
+        _record_book_history(
+            db, book_id, "cover_type", old_cover, book_data.cover_type,
+            current_admin.id, f"Thay đổi loại bìa bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.pages is not None and book_data.pages != book.pages:
+        old_pages = book.pages
         book.pages = book_data.pages
-    if book_data.publication_year is not None:
+        _record_book_history(
+            db, book_id, "pages", old_pages, book_data.pages,
+            current_admin.id, f"Thay đổi số trang bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.publication_year is not None and book_data.publication_year != book.publication_year:
+        old_year = book.publication_year
         book.publication_year = book_data.publication_year
-    if book_data.length is not None:
+        _record_book_history(
+            db, book_id, "publication_year", old_year, book_data.publication_year,
+            current_admin.id, f"Thay đổi năm xuất bản bởi {user_role} ({current_admin.username})"
+        )
+    
+    # Kích thước sản phẩm
+    if book_data.length is not None and book_data.length != book.length:
+        old_length = book.length
         book.length = book_data.length
-    if book_data.width is not None:
+        _record_book_history(
+            db, book_id, "length", old_length, book_data.length,
+            current_admin.id, f"Thay đổi chiều dài bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.width is not None and book_data.width != book.width:
+        old_width = book.width
         book.width = book_data.width
-    if book_data.thickness is not None:
+        _record_book_history(
+            db, book_id, "width", old_width, book_data.width,
+            current_admin.id, f"Thay đổi chiều rộng bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.thickness is not None and book_data.thickness != book.thickness:
+        old_thickness = book.thickness
         book.thickness = book_data.thickness
-    if book_data.weight is not None:
+        _record_book_history(
+            db, book_id, "thickness", old_thickness, book_data.thickness,
+            current_admin.id, f"Thay đổi độ dày bởi {user_role} ({current_admin.username})"
+        )
+    
+    if book_data.weight is not None and book_data.weight != book.weight:
+        old_weight = book.weight
         book.weight = book_data.weight
+        _record_book_history(
+            db, book_id, "weight", old_weight, book_data.weight,
+            current_admin.id, f"Thay đổi trọng lượng bởi {user_role} ({current_admin.username})"
+        )
     
     book.updated_at = datetime.utcnow()
     
@@ -3093,38 +3300,137 @@ async def update_voucher(
     if not voucher:
         raise HTTPException(status_code=404, detail="Voucher không tồn tại")
     
+    user_role = current_admin.role.role_name if current_admin.role else "unknown"
+    
     try:
-        # Update fields
-        if voucher_data.name is not None:
+        # Update fields và ghi lại lịch sử
+        if voucher_data.name is not None and voucher_data.name != voucher.name:
+            old_name = voucher.name
             voucher.name = voucher_data.name
-        if voucher_data.description is not None:
+            _record_voucher_history(
+                db, voucher_id, "name", old_name, voucher_data.name,
+                current_admin.id, f"Thay đổi tên voucher bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.description is not None and voucher_data.description != voucher.description:
+            old_desc = voucher.description
             voucher.description = voucher_data.description
-        if voucher_data.discount_type is not None:
+            _record_voucher_history(
+                db, voucher_id, "description", old_desc, voucher_data.description,
+                current_admin.id, f"Thay đổi mô tả voucher bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.discount_type is not None and voucher_data.discount_type != voucher.discount_type:
+            old_type = voucher.discount_type
             voucher.discount_type = voucher_data.discount_type
-        if voucher_data.discount_value is not None:
+            _record_voucher_history(
+                db, voucher_id, "discount_type", old_type, voucher_data.discount_type,
+                current_admin.id, f"Thay đổi loại giảm giá bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.discount_value is not None and voucher_data.discount_value != voucher.discount_value:
+            old_value = voucher.discount_value
             voucher.discount_value = voucher_data.discount_value
-        if voucher_data.min_order_amount is not None:
+            _record_voucher_history(
+                db, voucher_id, "discount_value", old_value, voucher_data.discount_value,
+                current_admin.id, f"Thay đổi giá trị giảm giá bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.min_order_amount is not None and voucher_data.min_order_amount != voucher.min_order_amount:
+            old_min = voucher.min_order_amount
             voucher.min_order_amount = voucher_data.min_order_amount
-        if voucher_data.max_discount_amount is not None:
+            _record_voucher_history(
+                db, voucher_id, "min_order_amount", old_min, voucher_data.min_order_amount,
+                current_admin.id, f"Thay đổi giá trị đơn hàng tối thiểu bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.max_discount_amount is not None and voucher_data.max_discount_amount != voucher.max_discount_amount:
+            old_max = voucher.max_discount_amount
             voucher.max_discount_amount = voucher_data.max_discount_amount
-        if voucher_data.usage_limit is not None:
+            _record_voucher_history(
+                db, voucher_id, "max_discount_amount", old_max, voucher_data.max_discount_amount,
+                current_admin.id, f"Thay đổi giảm giá tối đa bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.usage_limit is not None and voucher_data.usage_limit != voucher.usage_limit:
+            old_limit = voucher.usage_limit
             voucher.usage_limit = voucher_data.usage_limit
-        if voucher_data.user_limit is not None:
+            _record_voucher_history(
+                db, voucher_id, "usage_limit", old_limit, voucher_data.usage_limit,
+                current_admin.id, f"Thay đổi giới hạn sử dụng bởi {user_role} ({current_admin.username})"
+            )
+        
+        if voucher_data.user_limit is not None and voucher_data.user_limit != voucher.user_limit:
+            old_user_limit = voucher.user_limit
             voucher.user_limit = voucher_data.user_limit
+            _record_voucher_history(
+                db, voucher_id, "user_limit", old_user_limit, voucher_data.user_limit,
+                current_admin.id, f"Thay đổi giới hạn sử dụng mỗi user bởi {user_role} ({current_admin.username})"
+            )
+        
         if voucher_data.start_date is not None:
-            voucher.start_date = datetime.fromisoformat(voucher_data.start_date.replace('Z', '+00:00'))
+            new_start = datetime.fromisoformat(voucher_data.start_date.replace('Z', '+00:00'))
+            if new_start != voucher.start_date:
+                old_start = voucher.start_date
+                voucher.start_date = new_start
+                _record_voucher_history(
+                    db, voucher_id, "start_date", old_start.isoformat() if old_start else None, voucher_data.start_date,
+                    current_admin.id, f"Thay đổi ngày bắt đầu bởi {user_role} ({current_admin.username})"
+                )
+        
         if voucher_data.end_date is not None:
-            voucher.end_date = datetime.fromisoformat(voucher_data.end_date.replace('Z', '+00:00'))
-        if voucher_data.is_active is not None:
+            new_end = datetime.fromisoformat(voucher_data.end_date.replace('Z', '+00:00'))
+            if new_end != voucher.end_date:
+                old_end = voucher.end_date
+                voucher.end_date = new_end
+                _record_voucher_history(
+                    db, voucher_id, "end_date", old_end.isoformat() if old_end else None, voucher_data.end_date,
+                    current_admin.id, f"Thay đổi ngày kết thúc bởi {user_role} ({current_admin.username})"
+                )
+        
+        if voucher_data.is_active is not None and voucher_data.is_active != voucher.is_active:
+            old_active = voucher.is_active
             voucher.is_active = voucher_data.is_active
+            _record_voucher_history(
+                db, voucher_id, "is_active", old_active, voucher_data.is_active,
+                current_admin.id, f"Thay đổi trạng thái kích hoạt bởi {user_role} ({current_admin.username})"
+            )
+        
         if voucher_data.applicable_categories is not None:
-            voucher.applicable_categories = voucher_data.applicable_categories
+            old_cats = voucher.applicable_categories
+            if old_cats != voucher_data.applicable_categories:
+                voucher.applicable_categories = voucher_data.applicable_categories
+                _record_voucher_history(
+                    db, voucher_id, "applicable_categories", str(old_cats) if old_cats else None, str(voucher_data.applicable_categories),
+                    current_admin.id, f"Thay đổi danh mục áp dụng bởi {user_role} ({current_admin.username})"
+                )
+        
         if voucher_data.applicable_books is not None:
-            voucher.applicable_books = voucher_data.applicable_books
+            old_books = voucher.applicable_books
+            if old_books != voucher_data.applicable_books:
+                voucher.applicable_books = voucher_data.applicable_books
+                _record_voucher_history(
+                    db, voucher_id, "applicable_books", str(old_books) if old_books else None, str(voucher_data.applicable_books),
+                    current_admin.id, f"Thay đổi sách áp dụng bởi {user_role} ({current_admin.username})"
+                )
+        
         if voucher_data.excluded_categories is not None:
-            voucher.excluded_categories = voucher_data.excluded_categories
+            old_excl_cats = voucher.excluded_categories
+            if old_excl_cats != voucher_data.excluded_categories:
+                voucher.excluded_categories = voucher_data.excluded_categories
+                _record_voucher_history(
+                    db, voucher_id, "excluded_categories", str(old_excl_cats) if old_excl_cats else None, str(voucher_data.excluded_categories),
+                    current_admin.id, f"Thay đổi danh mục loại trừ bởi {user_role} ({current_admin.username})"
+                )
+        
         if voucher_data.excluded_books is not None:
-            voucher.excluded_books = voucher_data.excluded_books
+            old_excl_books = voucher.excluded_books
+            if old_excl_books != voucher_data.excluded_books:
+                voucher.excluded_books = voucher_data.excluded_books
+                _record_voucher_history(
+                    db, voucher_id, "excluded_books", str(old_excl_books) if old_excl_books else None, str(voucher_data.excluded_books),
+                    current_admin.id, f"Thay đổi sách loại trừ bởi {user_role} ({current_admin.username})"
+                )
         
         db.commit()
         db.refresh(voucher)
@@ -3887,6 +4193,49 @@ async def update_order(
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error updating order: {str(e)}")
 
+@app.get("/api/admin/orders")
+async def get_all_orders(
+    skip: int = 0,
+    limit: int = 50,
+    status: str = None,
+    current_admin: User = Depends(get_current_admin_or_staff_user),
+    db: Session = Depends(get_db)
+):
+    """Lấy tất cả đơn hàng (Admin/Staff)"""
+    try:
+        query = db.query(Order).options(
+            joinedload(Order.user),
+            joinedload(Order.order_items)
+        )
+        
+        if status:
+            query = query.filter(Order.status == status)
+        
+        orders = query.offset(skip).limit(limit).all()
+        
+        return {
+            "orders": [
+                {
+                    "id": order.id,
+                    "order_number": order.order_number,
+                    "user_name": f"{order.user.first_name or ''} {order.user.last_name or ''}".strip() if order.user else "Unknown",
+                    "user_email": order.user.email if order.user else "unknown@email.com",
+                    "status": order.status,
+                    "total_amount": float(order.total_amount),
+                    "payment_status": order.payment_status,
+                    "created_at": order.created_at.isoformat() if order.created_at else None,
+                    "items_count": len(order.order_items) if order.order_items else 0
+                }
+                for order in orders
+            ],
+            "total": len(orders)
+        }
+    except Exception as e:
+        print(f"❌ Get orders error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
+
 @app.get("/api/admin/orders/{order_id}/history")
 async def get_order_history(
     order_id: int,
@@ -3939,6 +4288,164 @@ async def get_order_history(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error getting order history: {str(e)}")
+
+@app.get("/api/admin/books/{book_id}/history")
+async def get_book_history(
+    book_id: int,
+    current_admin: User = Depends(get_current_admin_user),  # Chỉ admin mới xem được
+    db: Session = Depends(get_db)
+):
+    """Lấy lịch sử thay đổi sản phẩm (Admin only)"""
+    try:
+        print(f"📜 Getting book history for book #{book_id}")
+        
+        # Kiểm tra sản phẩm có tồn tại không
+        book = db.query(Book).filter(Book.id == book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found")
+        
+        # Lấy lịch sử với thông tin người tạo
+        history_records = db.query(BookHistory).options(
+            joinedload(BookHistory.creator)
+        ).filter(
+            BookHistory.book_id == book_id
+        ).order_by(
+            BookHistory.created_at.desc()
+        ).all()
+        
+        # Map field names to Vietnamese labels
+        field_labels = {
+            "title": "Tiêu đề",
+            "subtitle": "Phụ đề",
+            "description": "Mô tả",
+            "price": "Giá bán",
+            "cost_price": "Giá nhập",
+            "original_price": "Giá gốc",
+            "discount_percentage": "Phần trăm giảm giá",
+            "length": "Chiều dài",
+            "width": "Chiều rộng",
+            "thickness": "Độ dày",
+            "weight": "Trọng lượng",
+            "stock_quantity": "Tồn kho",
+            "is_active": "Trạng thái bán hàng",
+            "is_featured": "Nổi bật",
+            "is_bestseller": "Bán chạy",
+            "category_id": "Danh mục",
+            "publisher_id": "Nhà xuất bản",
+            "supplier_id": "Nhà cung cấp",
+            "language": "Ngôn ngữ",
+            "cover_type": "Loại bìa",
+            "pages": "Số trang",
+            "publication_year": "Năm xuất bản",
+        }
+        
+        return {
+            "book_id": book_id,
+            "book_title": book.title,
+            "history": [
+                {
+                    "id": record.id,
+                    "field_name": record.field_name,
+                    "field_label": field_labels.get(record.field_name, record.field_name),
+                    "old_value": record.old_value,
+                    "new_value": record.new_value,
+                    "notes": record.notes,
+                    "created_by": {
+                        "id": record.creator.id if record.creator else None,
+                        "username": record.creator.username if record.creator else "Unknown",
+                        "first_name": record.creator.first_name if record.creator else None,
+                        "last_name": record.creator.last_name if record.creator else None,
+                        "role": record.creator.role.role_name if record.creator and record.creator.role else "unknown",
+                    } if record.creator else None,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                }
+                for record in history_records
+            ],
+            "total": len(history_records)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting book history: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
+
+@app.get("/api/admin/vouchers/{voucher_id}/history")
+async def get_voucher_history(
+    voucher_id: int,
+    current_admin: User = Depends(get_current_admin_user),  # Chỉ admin mới xem được
+    db: Session = Depends(get_db)
+):
+    """Lấy lịch sử thay đổi voucher (Admin only)"""
+    try:
+        print(f"📜 Getting voucher history for voucher #{voucher_id}")
+        
+        # Kiểm tra voucher có tồn tại không
+        voucher = db.query(Voucher).filter(Voucher.id == voucher_id).first()
+        if not voucher:
+            raise HTTPException(status_code=404, detail="Voucher not found")
+        
+        # Lấy lịch sử với thông tin người tạo
+        history_records = db.query(VoucherHistory).options(
+            joinedload(VoucherHistory.creator)
+        ).filter(
+            VoucherHistory.voucher_id == voucher_id
+        ).order_by(
+            VoucherHistory.created_at.desc()
+        ).all()
+        
+        # Map field names to Vietnamese labels
+        field_labels = {
+            "name": "Tên voucher",
+            "description": "Mô tả",
+            "discount_type": "Loại giảm giá",
+            "discount_value": "Giá trị giảm giá",
+            "min_order_amount": "Giá trị đơn hàng tối thiểu",
+            "max_discount_amount": "Giảm giá tối đa",
+            "usage_limit": "Giới hạn sử dụng",
+            "user_limit": "Giới hạn mỗi user",
+            "start_date": "Ngày bắt đầu",
+            "end_date": "Ngày kết thúc",
+            "is_active": "Trạng thái kích hoạt",
+            "applicable_categories": "Danh mục áp dụng",
+            "applicable_books": "Sách áp dụng",
+            "excluded_categories": "Danh mục loại trừ",
+            "excluded_books": "Sách loại trừ",
+        }
+        
+        return {
+            "voucher_id": voucher_id,
+            "voucher_code": voucher.code,
+            "voucher_name": voucher.name,
+            "history": [
+                {
+                    "id": record.id,
+                    "field_name": record.field_name,
+                    "field_label": field_labels.get(record.field_name, record.field_name),
+                    "old_value": record.old_value,
+                    "new_value": record.new_value,
+                    "notes": record.notes,
+                    "created_by": {
+                        "id": record.creator.id if record.creator else None,
+                        "username": record.creator.username if record.creator else "Unknown",
+                        "first_name": record.creator.first_name if record.creator else None,
+                        "last_name": record.creator.last_name if record.creator else None,
+                        "role": record.creator.role.role_name if record.creator and record.creator.role else "unknown",
+                    } if record.creator else None,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                }
+                for record in history_records
+            ],
+            "total": len(history_records)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting voucher history: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
 
 @app.post("/api/orders/{order_id}/cancel")
 async def cancel_order(
@@ -3999,49 +4506,6 @@ async def get_stats(db: Session = Depends(get_db)):
 # =====================================================
 # ADMIN ENDPOINTS
 # =====================================================
-
-@app.get("/api/admin/orders")
-async def get_all_orders(
-    skip: int = 0,
-    limit: int = 50,
-    status: str = None,
-    current_admin: User = Depends(get_current_admin_or_staff_user),
-    db: Session = Depends(get_db)
-):
-    """Lấy tất cả đơn hàng (Admin/Staff)"""
-    try:
-        query = db.query(Order).options(
-            joinedload(Order.user),
-            joinedload(Order.order_items)
-        )
-        
-        if status:
-            query = query.filter(Order.status == status)
-        
-        orders = query.offset(skip).limit(limit).all()
-        
-        return {
-            "orders": [
-                {
-                    "id": order.id,
-                    "order_number": order.order_number,
-                    "user_name": f"{order.user.first_name or ''} {order.user.last_name or ''}".strip() if order.user else "Unknown",
-                    "user_email": order.user.email if order.user else "unknown@email.com",
-                    "status": order.status,
-                    "total_amount": float(order.total_amount),
-                    "payment_status": order.payment_status,
-                    "created_at": order.created_at.isoformat() if order.created_at else None,
-                    "items_count": len(order.order_items) if order.order_items else 0
-                }
-                for order in orders
-            ],
-            "total": len(orders)
-        }
-    except Exception as e:
-        print(f"❌ Get orders error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Get orders error: {str(e)}")
 
 @app.get("/api/admin/users")
 async def get_all_users(
@@ -4584,7 +5048,7 @@ async def search_books(
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv('PORT', 8000))
+    port = int(os.getenv('PORT', 7000))
     print(f"Starting server on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port)
 
