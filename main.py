@@ -3668,17 +3668,40 @@ async def get_order_details(
     db: Session = Depends(get_db)
 ):
     """Lấy chi tiết đơn hàng"""
-    order = db.query(Order).options(
-        joinedload(Order.voucher),
-        joinedload(Order.shipping_address),
-        joinedload(Order.payment_method)
-    ).filter(Order.id == order_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-    
-    # Check if user owns this order or is admin
-    if order.user_id != current_user.id and current_user.role.role_name != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized to view this order")
+    try:
+        print(f"📦 Getting order details for order #{order_id} by user {current_user.id} (role: {current_user.role.role_name if current_user.role else 'unknown'})")
+        
+        order = db.query(Order).options(
+            joinedload(Order.voucher),
+            joinedload(Order.shipping_address),
+            joinedload(Order.payment_method)
+        ).filter(Order.id == order_id).first()
+        
+        if not order:
+            print(f"❌ Order #{order_id} not found")
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        print(f"✅ Order #{order_id} found, status: {order.status}, user_id: {order.user_id}")
+        
+        # Check if user owns this order, is admin, or is staff
+        user_role = current_user.role.role_name if current_user.role else None
+        is_owner = order.user_id == current_user.id
+        is_admin_or_staff = user_role in ["admin", "staff"]
+        
+        print(f"🔐 Authorization check: is_owner={is_owner}, user_role={user_role}, is_admin_or_staff={is_admin_or_staff}")
+        
+        if not is_owner and not is_admin_or_staff:
+            print(f"❌ Unauthorized: User {current_user.id} cannot view order #{order_id}")
+            raise HTTPException(status_code=403, detail="Not authorized to view this order")
+        
+        print(f"✅ Authorization passed for order #{order_id}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting order details: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error getting order details: {str(e)}")
     
     # Get order items with book information
     order_items = db.query(OrderItem).options(
