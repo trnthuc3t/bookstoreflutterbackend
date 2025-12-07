@@ -168,6 +168,7 @@ class BookUpdate(BaseModel):
     subtitle: Optional[str] = None
     description: Optional[str] = None
     price: Optional[float] = None
+    cost_price: Optional[float] = None  # Giá vốn/giá nhập
     original_price: Optional[float] = None
     discount_percentage: Optional[float] = None
     stock_quantity: Optional[int] = None
@@ -1498,6 +1499,7 @@ async def get_book(book_id: int, db: Session = Depends(get_db)):
         "isbn": book.isbn,
         "description": book.description,
         "price": float(book.price),
+        "cost_price": float(book.cost_price) if book.cost_price else None,
         "original_price": float(book.original_price) if book.original_price else None,
         "discount_percentage": float(book.discount_percentage),
         "stock_quantity": book.stock_quantity,
@@ -1795,6 +1797,7 @@ async def create_book_with_image(
     publication_year: str = Form(None),
     pages: str = Form(None),
     price: str = Form("0"),
+    cost_price: str = Form(None),  # Giá vốn/giá nhập
     original_price: str = Form(None),
     stock_quantity: str = Form("0"),
     category_id: str = Form(None),
@@ -1817,6 +1820,7 @@ async def create_book_with_image(
         publication_year_int = int(publication_year) if publication_year and publication_year != "None" and publication_year != "" else None
         pages_int = int(pages) if pages and pages != "None" and pages != "" else None
         price_float = float(price) if price and price != "None" and price != "" else 0.0
+        cost_price_float = float(cost_price) if cost_price and cost_price != "None" and cost_price != "" else None
         original_price_float = float(original_price) if original_price and original_price != "None" and original_price != "" else None
         stock_quantity_int = int(stock_quantity) if stock_quantity and stock_quantity != "None" and stock_quantity != "" else 0
         category_id_int = int(category_id) if category_id and category_id != "None" and category_id != "" else None
@@ -1853,6 +1857,7 @@ async def create_book_with_image(
         publication_year=publication_year_int,
         pages=pages_int,
         price=price_float,
+        cost_price=cost_price_float,
         original_price=original_price_float,
         discount_percentage=discount_percentage,
         stock_quantity=stock_quantity_int,
@@ -1965,6 +1970,11 @@ async def update_book(
         book.subtitle = book_data.subtitle
     if book_data.description is not None:
         book.description = book_data.description
+    
+    # Update cost_price if provided
+    if book_data.cost_price is not None:
+        book.cost_price = book_data.cost_price
+        print(f"💰 Cost price updated: {book.cost_price}")
     
     # Handle price and discount logic
     # First, update original_price if provided
@@ -3658,7 +3668,11 @@ async def get_order_details(
     db: Session = Depends(get_db)
 ):
     """Lấy chi tiết đơn hàng"""
-    order = db.query(Order).filter(Order.id == order_id).first()
+    order = db.query(Order).options(
+        joinedload(Order.voucher),
+        joinedload(Order.shipping_address),
+        joinedload(Order.payment_method)
+    ).filter(Order.id == order_id).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
@@ -3681,6 +3695,15 @@ async def get_order_details(
         "total_amount": float(order.total_amount),
         "payment_status": order.payment_status,
         "payment_method": order.payment_method.name if order.payment_method else None,
+        "voucher": {
+            "id": order.voucher.id,
+            "code": order.voucher.code,
+            "description": order.voucher.description,
+            "discount_type": order.voucher.discount_type,
+            "discount_value": float(order.voucher.discount_value),
+            "min_order_value": float(order.voucher.min_order_value) if order.voucher.min_order_value else None,
+            "max_discount": float(order.voucher.max_discount) if order.voucher.max_discount else None,
+        } if order.voucher else None,
         "shipping_address": {
             "recipient_name": order.shipping_address.recipient_name,
             "phone": order.shipping_address.phone,
@@ -3743,6 +3766,23 @@ async def update_order(
         # Update fields
         if order_data.status is not None:
             old_status = order.status
+            
+            # Không cho phép thay đổi trạng thái đơn hàng đã hoàn thành hoặc đã hoàn tiền
+            if old_status in ["delivered", "refunded"]:
+                print(f"❌ Cannot change status of order with status: {old_status}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Đơn hàng đã {('hoàn thành' if old_status == 'delivered' else 'hoàn tiền')}, không thể thay đổi trạng thái"
+                )
+            
+            # Không cho phép hủy đơn hàng đã hoàn thành hoặc đã hoàn tiền (double check)
+            if order_data.status == "cancelled" and old_status in ["delivered", "refunded"]:
+                print(f"❌ Cannot cancel order with status: {old_status}")
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Không thể hủy đơn hàng đã {('hoàn thành' if old_status == 'delivered' else 'hoàn tiền')}"
+                )
+            
             order.status = order_data.status
             print(f"🔄 Updating status: {old_status} → {order_data.status}")
             
@@ -4035,6 +4075,7 @@ async def get_all_books_admin(
                 "id": book.id,
                 "title": book.title,
                 "price": float(book.price),
+                "cost_price": float(book.cost_price) if book.cost_price else None,
                 "stock_quantity": book.stock_quantity,
                 "sold_quantity": book.sold_quantity,
                 "is_active": book.is_active,
@@ -4159,16 +4200,16 @@ async def get_revenue_statistics(
         total_discount = sum(float(order.discount_amount or 0) for order in orders)  # Total voucher discounts
         total_revenue_before_discount = total_revenue + total_discount  # Revenue before voucher
         
-        # Profit = revenue - cost (assuming original_price is cost)
+        # Profit = revenue - cost (using cost_price)
         total_profit = 0
         for order in orders:
             for item in order.order_items:
                 book = item.book
                 if book:
-                    # Profit per item = (selling price - original price) * quantity
-                    original_price = float(book.original_price) if book.original_price else float(book.price)
+                    # Profit per item = (selling price - cost price) * quantity
+                    cost_price = float(book.cost_price) if book.cost_price else 0
                     selling_price = float(item.unit_price)
-                    profit_per_item = (selling_price - original_price) * item.quantity
+                    profit_per_item = (selling_price - cost_price) * item.quantity
                     total_profit += profit_per_item
         
         # Adjust profit by subtracting voucher discounts (we gave away this money)
@@ -4229,7 +4270,6 @@ async def get_book_statistics(
             
             book_id = book.id
             if book_id not in book_stats:
-                original_price = float(book.original_price) if book.original_price else float(book.price)
                 book_stats[book_id] = {
                     "book_id": book_id,
                     "book_name": book.title,
@@ -4237,17 +4277,18 @@ async def get_book_statistics(
                     "sold_quantity": 0,
                     "revenue": 0.0,
                     "profit": 0.0,
-                    "stock_remaining": book.stock_quantity
+                    "stock_remaining": book.stock_quantity,
+                    "cost_price": float(book.cost_price) if book.cost_price else 0
                 }
             
             # Update statistics
             book_stats[book_id]["sold_quantity"] += item.quantity
             book_stats[book_id]["revenue"] += float(item.unit_price) * item.quantity
             
-            # Calculate profit
-            original_price = float(book.original_price) if book.original_price else float(book.price)
+            # Calculate profit using cost_price
+            cost_price = float(book.cost_price) if book.cost_price else 0
             selling_price = float(item.unit_price)
-            profit = (selling_price - original_price) * item.quantity
+            profit = (selling_price - cost_price) * item.quantity
             book_stats[book_id]["profit"] += profit
         
         # Convert to list and sort by sold quantity
@@ -4326,16 +4367,17 @@ async def get_category_statistics(
                     "book_name": book.title,
                     "sold_quantity": 0,
                     "profit": 0.0,
-                    "stock_remaining": book.stock_quantity
+                    "stock_remaining": book.stock_quantity,
+                    "cost_price": float(book.cost_price) if book.cost_price else 0
                 }
             
             # Update book stats
             category_stats[category_id]["books"][book_id]["sold_quantity"] += item.quantity
             
-            # Calculate profit
-            original_price = float(book.original_price) if book.original_price else float(book.price)
+            # Calculate profit using cost_price
+            cost_price = float(book.cost_price) if book.cost_price else 0
             selling_price = float(item.unit_price)
-            profit = (selling_price - original_price) * item.quantity
+            profit = (selling_price - cost_price) * item.quantity
             category_stats[category_id]["books"][book_id]["profit"] += profit
             
             # Update category totals
