@@ -3809,6 +3809,19 @@ async def update_order(
             order.status = order_data.status
             print(f"🔄 Updating status: {old_status} → {order_data.status}")
             
+            # Ghi lại lịch sử thay đổi trạng thái
+            user_role = current_admin.role.role_name if current_admin.role else "unknown"
+            history_note = f"Thay đổi trạng thái từ '{old_status}' sang '{order_data.status}' bởi {user_role} ({current_admin.username})"
+            
+            order_history = OrderHistory(
+                order_id=order.id,
+                status=order_data.status,
+                notes=history_note,
+                created_by=current_admin.id
+            )
+            db.add(order_history)
+            print(f"📝 Order history recorded: {history_note}")
+            
             # Set timestamps based on status
             if order_data.status == "shipped":
                 order.shipped_at = datetime.utcnow()
@@ -3873,6 +3886,59 @@ async def update_order(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error updating order: {str(e)}")
+
+@app.get("/api/admin/orders/{order_id}/history")
+async def get_order_history(
+    order_id: int,
+    current_admin: User = Depends(get_current_admin_user),  # Chỉ admin mới xem được
+    db: Session = Depends(get_db)
+):
+    """Lấy lịch sử thay đổi đơn hàng (Admin only)"""
+    try:
+        print(f"📜 Getting order history for order #{order_id}")
+        
+        # Kiểm tra đơn hàng có tồn tại không
+        order = db.query(Order).filter(Order.id == order_id).first()
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        # Lấy lịch sử với thông tin người tạo
+        history_records = db.query(OrderHistory).options(
+            joinedload(OrderHistory.creator)
+        ).filter(
+            OrderHistory.order_id == order_id
+        ).order_by(
+            OrderHistory.created_at.desc()
+        ).all()
+        
+        return {
+            "order_id": order_id,
+            "order_number": order.order_number,
+            "history": [
+                {
+                    "id": record.id,
+                    "status": record.status,
+                    "notes": record.notes,
+                    "created_by": {
+                        "id": record.creator.id if record.creator else None,
+                        "username": record.creator.username if record.creator else "Unknown",
+                        "first_name": record.creator.first_name if record.creator else None,
+                        "last_name": record.creator.last_name if record.creator else None,
+                        "role": record.creator.role.role_name if record.creator and record.creator.role else "unknown",
+                    } if record.creator else None,
+                    "created_at": record.created_at.isoformat() if record.created_at else None,
+                }
+                for record in history_records
+            ],
+            "total": len(history_records)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"❌ Error getting order history: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error getting order history: {str(e)}")
 
 @app.post("/api/orders/{order_id}/cancel")
 async def cancel_order(
